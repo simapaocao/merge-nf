@@ -1,0 +1,14 @@
+{
+  "name": "@nf-hub/nf-connector",
+  "version": "0.1.2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "package": "bun scripts/package.ts",
+    "test": "bun test test",
+    "check:host-manifest": "bun scripts/check-host-manifest.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": { "@nf-hub/protocol": "workspace:*" }
+}

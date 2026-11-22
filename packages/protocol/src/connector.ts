@@ -1,0 +1,28 @@
+import { z } from 'zod';
+import { LIMITS, PROTOCOL_VERSION } from './constants';
+import { scopeSchema, summarySchema, timeSchema } from './summary';
+
+export const versionSchema = z.literal(PROTOCOL_VERSION);
+export const generationSchema = z.number().int().positive();
+export const pairCodeSchema = z.string().regex(/^[A-Za-z0-9_-]{22}$/);
+export const tokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+const releaseSchema = z.string().max(64).regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?$/);
+export const capabilitySchema = z.enum(['summary.v1', 'projectNames.v1']);
+export const capabilitiesSchema = z.array(capabilitySchema).min(1).max(2).refine(x => x.includes('summary.v1') && x.length === new Set(x).size);
+export const failureCodeSchema = z.enum(['HOST_UNAVAILABLE','QUERY_FAILED','INVALID_RECORD','CURSOR_INVALID','DUPLICATE_ID','COLLECTION_TIMEOUT','LIMIT_EXCEEDED','PROJECT_QUERY_FAILED','CANCELLED']);
+export type FailureCode = z.infer<typeof failureCodeSchema>;
+export const pairRequestSchema = z.strictObject({ protocolVersion: versionSchema, code: pairCodeSchema, scope: scopeSchema.refine(s => s.mode !== 'none'), confirmed: z.literal(true), connectorVersion: releaseSchema, nfVersion: releaseSchema.optional(), capabilities: capabilitiesSchema });
+export const pairResponseSchema = z.strictObject({ protocolVersion: versionSchema, instanceId: z.uuid(), generation: generationSchema, token: tokenSchema });
+export const runRequestSchema = z.strictObject({ protocolVersion: versionSchema, generation: generationSchema });
+export const runResponseSchema = z.strictObject({ protocolVersion: versionSchema, generation: generationSchema, runId: generationSchema, expiresAt: timeSchema });
+const runBase = { protocolVersion: versionSchema, generation: generationSchema, runId: generationSchema };
+export const snapshotRequestSchema = z.strictObject({ ...runBase, count: z.number().int().min(0).max(LIMITS.summaries), hash: z.string().regex(/^[0-9a-f]{64}$/), summaries: z.array(summarySchema).max(LIMITS.summaries) });
+export const snapshotResponseSchema = z.strictObject({ runId: generationSchema, acceptedAt: timeSchema, duplicate: z.boolean() });
+export const failedRequestSchema = z.strictObject({ ...runBase, errorCode: failureCodeSchema });
+export type PairRequest = z.infer<typeof pairRequestSchema>;
+export type PairResponse = z.infer<typeof pairResponseSchema>;
+export type RunRequest = z.infer<typeof runRequestSchema>;
+export type RunResponse = z.infer<typeof runResponseSchema>;
+export type SnapshotRequest = z.infer<typeof snapshotRequestSchema>;
+export type SnapshotResponse = z.infer<typeof snapshotResponseSchema>;
+export type FailedRequest = z.infer<typeof failedRequestSchema>;

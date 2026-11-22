@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "pluginId": "local.nf-hub.connector",
+  "version": "0.1.2",
+  "displayName": "NF 聚合摘要连接器",
+  "description": "经明确授权向固定聚合中心主动发布只读会话摘要；不读取正文、不接受远程执行指令。",
+  "publisher": { "id": "local.nf-hub", "name": "NF Hub" },
+  "engine": {
+    "runtime": "bun", "runtimeVersion": ">=1.3.14 <2", "hostApi": ">=1.0 <2",
+    "rpc": "narrafork.rpc/1", "features": ["host_api.requests"],
+    "os": ["win32", "linux", "darwin"], "arch": ["x64", "arm64"], "runner": "local-process"
+  },
+  "server": {
+    "entry": "server/index.js", "transport": "stdio", "protocol": "narrafork.rpc/1",
+    "workingDirectory": "package", "startupTimeoutMs": 15000, "activationTimeoutMs": 30000
+  },
+  "ui": { "entry": "ui/panel.iife.js", "format": "iife", "shell": "host-controlled" },
+  "activationEvents": ["onStartup", "onView:summary-settings", "onCommand:connector-status", "onCommand:connector-configure", "onCommand:connector-pair", "onCommand:connector-pause", "onCommand:connector-resume", "onCommand:connector-sync", "onCommand:connector-forget"],
+  "contributes": {
+    "views": [{ "id": "summary-settings", "title": "摘要连接设置", "entry": "ui/panel.iife.js", "surfaces": ["settings"], "scope": "global", "instance": "singleton" }],
+    "commands": [
+      { "id": "connector-status", "title": "读取摘要连接状态", "handler": "server" },
+      { "id": "connector-configure", "title": "保存摘要发布设置", "handler": "server" },
+      { "id": "connector-pair", "title": "在后台配对摘要中心", "handler": "server" },
+      { "id": "connector-pause", "title": "暂停摘要上报", "handler": "server" },
+      { "id": "connector-resume", "title": "恢复摘要上报", "handler": "server" },
+      { "id": "connector-sync", "title": "立即完整同步摘要", "handler": "server" },
+      { "id": "connector-forget", "title": "清除本地摘要配对", "handler": "server" }
+    ]
+  },
+  "permissions": {
+    "host": ["ui.panel", "storage.read_self", "storage.write_self", "secret.use_self", "query.read.narrators", "query.read.projects"],
+    "network": { "mode": "configured-https-only", "purpose": "仅向用户明确确认的固定中心基址出站；由插件校验，不是宿主网络沙箱" },
+    "filesystem": { "package": "readOnly", "workspace": "none", "pluginData": "none" },
+    "process": { "spawn": "none" }
+  },
+  "secrets": [
+    { "id": "pairing-code", "label": "一次性配对码", "required": false, "scope": ["user"], "usage": "outbound-network", "inject": "rpc-opaque-reference" },
+    { "id": "report-credential", "label": "绑定中心的上报凭据", "required": false, "scope": ["user"], "usage": "outbound-network", "inject": "rpc-opaque-reference" }
+  ],
+  "dependencies": { "plugins": {}, "runtime": {} }
+}

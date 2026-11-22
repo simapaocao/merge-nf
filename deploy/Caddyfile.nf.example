@@ -1,0 +1,18 @@
+# Separate optional site on the NF-side TLS proxy; not loaded by compose.yaml.
+# Run it on a proxy that already has access to the NF's trusted LAN/VPN.
+# Replace this fixed hostname/port with the NF listener configured by its operator.
+# This HTTP hop must stay inside trusted LAN/VPN; never send cleartext over the public internet.
+# For an untrusted hop, use HTTPS with a valid, verified upstream certificate instead.
+# hub.example.net and nf-a.example.net MUST be different hostnames: ports do not isolate host-only cookies.
+https://nf-a.example.net {
+	reverse_proxy http://nf-a.vpn.example.net:17901 {
+		flush_interval -1
+	}
+}
+
+# Preserve NF authentication and security response headers. Do not loosen CORS,
+# remove X-Frame-Options/CSP, or add a wildcard frame-ancestors policy to force embedding.
+# Configure NF's supported embedding mechanism for exactly https://hub.example.net;
+# otherwise use the workbench's independent open-in-new-window path.
+# For LAN/internal TLS, use a certificate already trusted by browsers/connectors.
+# No CA installation, local CA generation or verification bypass is performed here.

@@ -1,0 +1,9 @@
+# Explicit opt-in: docker compose --env-file deploy/.env -f deploy/compose.yaml -f deploy/compose.public.yaml up -d
+# Requires PUBLIC_URL's hostname to resolve here and public TCP 80/443 for ACME.
+# UDP 443 enables HTTP/3 and can be omitted when your network does not allow it.
+services:
+  caddy:
+    ports:
+      - "80:8080/tcp"
+      - "443:8443/tcp"
+      - "443:8443/udp"

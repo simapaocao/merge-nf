@@ -1,0 +1,21 @@
+{
+	admin off
+	# High container ports permit an unprivileged proxy; public mapping is opt-in.
+	http_port 8080
+	https_port 8443
+}
+
+# PUBLIC_URL must be the hub's canonical HTTPS origin, e.g. https://hub.example.net.
+# The original Host is preserved so the hub can verify it against PUBLIC_URL.
+{$PUBLIC_URL} {
+	reverse_proxy http://hub:17900 {
+		# Stream responses immediately; Caddy handles WebSocket upgrade automatically.
+		flush_interval -1
+	}
+}
+
+# Internal/LAN TLS alternative: supply and mount an existing trusted certificate
+# and matching private key, then add `tls /certs/fullchain.pem /certs/privkey.pem`
+# inside the site block. All clients and NF connectors must trust that issuer.
+# Do not use tls internal, tls_insecure_skip_verify, wildcard CSP/CORS, header
+# stripping, dynamic request-supplied upstreams, or access logs containing secrets.
