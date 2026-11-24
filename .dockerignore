@@ -26,6 +26,9 @@
 !packages/nf-connector/package.json
 !deploy/
 !deploy/hub.sh
+!deploy/http-device-https/
+!deploy/http-device-https/Caddyfile
+!deploy/http-device-https/compose.yaml
 
 # Reapply exclusions AFTER allowlists, including inside otherwise allowed src/public.
 **/.*
@@ -99,3 +102,8 @@
 
 # This exact audited source module implements the CLI; it is not a backup artifact.
 !apps/server/src/backup.ts
+
+# This exact public template is bundled into the web assets by Vite `?raw`; the
+# `**/*.env.*` rule above would otherwise drop it. Only this one literal name is
+# re-admitted, so real .env files, secrets, databases and keys stay excluded.
+!deploy/http-device-https/settings.env.example

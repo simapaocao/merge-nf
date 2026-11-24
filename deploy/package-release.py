@@ -39,22 +39,27 @@ TEXT_GROUPS = {
         "static.ts", "sync.ts", "web-routes.ts",
     ),
     "apps/server/test": (
-        "auth-http.test.ts", "dashboard.test.ts", "fixture.ts", "limits.test.ts",
-        "recovery.test.ts", "static.test.ts", "sync.test.ts",
+        "auth-http.test.ts", "dashboard.test.ts", "fixture.ts", "instances.test.ts",
+        "limits.test.ts", "recovery.test.ts", "static.test.ts", "sync.test.ts",
     ),
     "apps/web": ("package.json", "index.html", "tsconfig.json", "vite.config.ts"),
     "apps/web/public": ("theme-init.js",),
     "apps/web/src": ("App.tsx", "main.tsx", "styles.css"),
     "apps/web/src/components": (
-        "AppearanceMenu.tsx", "Common.tsx", "Icon.tsx", "InstanceEditor.tsx", "OverviewCards.tsx", "PairingDialog.tsx",
+        "AppearanceMenu.tsx", "Common.tsx", "ConnectionPathGuide.tsx", "HttpAccessGuide.tsx",
+        "Icon.tsx", "InstanceEditor.tsx", "OverviewCards.tsx", "PairingDialog.tsx",
+        "httpFrontAddress.ts",
     ),
     "apps/web/src/hooks": ("useAppearance.ts", "useAppState.tsx", "useData.ts"),
-    "apps/web/src/lib": ("api.ts", "errors.ts", "format.ts", "frames.ts", "navigation.ts"),
+    "apps/web/src/lib": (
+        "api.ts", "errors.ts", "format.ts", "frames.ts", "httpAccessTemplates.ts", "navigation.ts",
+    ),
     "apps/web/src/pages": (
         "ConnectionsPage.tsx", "LoginPage.tsx", "SessionsPage.tsx", "WorkbenchPage.tsx",
     ),
     "apps/web/test": (
-        "appearance.test.tsx", "components.test.tsx", "format.test.ts", "navigation.test.ts", "security-state.test.ts",
+        "appearance.test.tsx", "components.test.tsx", "format.test.ts", "http-access.test.tsx",
+        "navigation.test.ts", "security-state.test.ts",
     ),
     "packages/protocol": ("package.json",),
     "packages/protocol/src": ("connector.ts", "constants.ts", "index.ts", "summary.ts", "url.ts", "web.ts"),
@@ -74,11 +79,16 @@ TEXT_GROUPS = {
         ".env.example", "Caddy.Dockerfile", "Caddyfile", "Caddyfile.nf.example", "compose.public.yaml",
         "compose.yaml", "Dockerfile", "hub.sh", "package-release.py",
     ),
+    # Public device-side templates. They are the single source inlined into the web
+    # bundle by Vite `?raw`, so the release must carry them verbatim. All three are
+    # plain text configuration with no key, token, CA or real environment value.
+    "deploy/http-device-https": ("Caddyfile", "compose.yaml", "settings.env.example"),
 }
 STRICT_SOURCE_ROOTS = (
     "apps/server/src", "apps/server/test", "apps/web/src", "apps/web/test",
     "packages/protocol/src", "packages/protocol/test", "packages/nf-connector/src",
     "packages/nf-connector/ui", "packages/nf-connector/scripts", "packages/nf-connector/test",
+    "deploy/http-device-https",
 )
 TEXT_MEMBERS = tuple(
     f"{folder}/{name}" if folder else name

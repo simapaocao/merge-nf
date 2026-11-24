@@ -1,0 +1,84 @@
+# 独立 HTTPS 前置（只新增本项目资源）。
+#
+# 只做一件事：把设备原有的 HTTP 入口包成 HTTPS 入口，不改动、不重启设备上的服务。
+# 不修改宿主机上其它项目、容器、镜像、卷，也不改 Docker 全局配置；不使用 host 网络。
+#
+# 启动：
+#   docker compose --env-file settings.env.example up -d
+#
+# 需要改的只有 settings.env.example 里的变量；本文件不需要编辑。
+#
+# 同一网关给多台设备各起一套时：每台放进不同目录，或用 -p 指定不同项目名，
+# 并让各自的 NF_HTTPS_PORT 不同。容器名与数据卷都按项目名自动隔离，
+# 不会互相覆盖，也不会共享 CA 与证书。
+
+services:
+  # 一次性初始化：只为本项目两个新命名卷设置非 root 运行属主与最小权限。
+  # 不联网、不发布端口、执行完即退出，不触碰任何既有卷。
+  init-perms:
+    image: caddy@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b
+    restart: "no"
+    network_mode: none
+    user: "0:0"
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        mkdir -p /data/caddy /config/caddy
+        chown -R 10001:10001 /data /config
+        chmod 0700 /data /config /data/caddy /config/caddy
+        echo "nf-http-https-front volumes ready"
+    volumes:
+      - front-data:/data
+      - front-config:/config
+
+  front:
+    # 官方 Caddy 镜像，按 Docker Hub 官方 index digest 固定（2.11.9，多架构）。
+    image: caddy@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b
+    restart: unless-stopped
+    depends_on:
+      init-perms:
+        condition: service_completed_successfully
+    # 非 root、只读根、丢弃全部能力
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # 只绑定一个受信地址，不监听 0.0.0.0，也不发布 80/443/2019。
+    # 左侧是宿主地址（谁能连），右侧是容器内 HTTPS 端口。
+    ports:
+      - "${NF_HTTPS_HOST_BIND:?set NF_HTTPS_HOST_BIND in settings.env}:${NF_HTTPS_PORT:-8443}:${NF_HTTPS_PORT:-8443}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - front-data:/data
+      - front-config:/config
+    tmpfs:
+      # 只读根下唯一可写的临时目录，私有且不可执行
+      - /tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777
+    environment:
+      # Caddyfile 读取的变量；容器内 bind 固定为 0.0.0.0，对外可达性由上面的 ports 决定
+      NF_HTTPS_PUBLIC_IP: ${NF_HTTPS_PUBLIC_IP:?set NF_HTTPS_PUBLIC_IP in settings.env}
+      NF_HTTPS_PORT: ${NF_HTTPS_PORT:-8443}
+      NF_HTTPS_BIND: 0.0.0.0
+      NF_HTTP_UPSTREAM_HOST: ${NF_HTTP_UPSTREAM_HOST:?set NF_HTTP_UPSTREAM_HOST in settings.env}
+      NF_HTTP_UPSTREAM_PORT: ${NF_HTTP_UPSTREAM_PORT:-7778}
+      XDG_DATA_HOME: /data
+      XDG_CONFIG_HOME: /config
+      HOME: /tmp
+    stop_grace_period: 10s
+
+volumes:
+  # 不写死 name：由 Compose 按项目名加前缀，同网关多套前置各自独立。
+  front-data: {}
+  front-config: {}

@@ -42,7 +42,9 @@ export function createInstance(db: Database, cfg: Config, raw: CreateInstance, n
 export function updateInstance(db: Database, cfg: Config, id: string, data: UpdateInstance, now: number) {
   return db.transaction(() => {
     const old = instanceRecord(db,id), {base,origin} = browserBase(data.browserBaseUrl ?? old.browserBaseUrl,cfg);
-    if (base !== old.browserBaseUrl && (old.authState === 'active' || db.query('SELECT 1 FROM pairings WHERE instanceId=? AND expiresAt>?').get(id,now))) fail(409,'REVOKE_FIRST');
+    // Connector authorization is bound to tokenHash, generation and authState; the browser entry point is
+    // only metadata. Editing it must not revoke credentials or pending codes, so no credential row, pairing
+    // row or generation is touched here and a revoked instance stays revoked.
     uniqueOrigin(db,origin,id);
     db.query('UPDATE instances SET alias=?,groupName=?,color=?,sortOrder=?,favorite=?,browserBaseUrl=?,browserOrigin=?,embedStatus=? WHERE id=?')
       .run(data.alias ?? old.alias,data.group ?? old.groupName,data.color ?? old.color,data.order ?? old.sortOrder,Number(data.favorite ?? !!old.favorite),base,origin,base === old.browserBaseUrl ? data.embedStatus ?? old.embedStatus : 'unverified',id);

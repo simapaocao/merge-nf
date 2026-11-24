@@ -17,6 +17,12 @@ FROM manifests AS web-build
 RUN bun install --frozen-lockfile
 COPY tsconfig.json ./
 COPY packages/protocol/src ./packages/protocol/src
+# The web bundle inlines these public device-side templates via Vite `?raw`.
+# Exactly three public text templates enter this stage; never an env file,
+# secret, CA or private key, and none of them reach the runtime stage.
+COPY deploy/http-device-https/Caddyfile ./deploy/http-device-https/Caddyfile
+COPY deploy/http-device-https/compose.yaml ./deploy/http-device-https/compose.yaml
+COPY deploy/http-device-https/settings.env.example ./deploy/http-device-https/settings.env.example
 # .dockerignore admits this workspace's build inputs, not tests, secrets or dist.
 COPY apps/web ./apps/web
 RUN bun run --cwd apps/web build

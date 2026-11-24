@@ -1,0 +1,73 @@
+# 独立 HTTPS 前置：给「只提供 HTTP 的 NF 设备」多加一层 HTTPS。
+#
+# 设备原 HTTP 服务不改、不重启、不替换；本前置只是新增一层，把
+#   http://<设备 HTTP 入口>        （例如 http://10.8.0.12:7778）
+# 包成
+#   https://<HTTPS 入口>           （例如 https://10.8.0.12:8443）
+#
+# 这一段 HTTP 到 HTTPS 的上游只允许走：设备本机、可信局域网或 VPN。
+# 不要把带登录凭据的 HTTP 跨公网传输；公网应只访问本前置的 HTTPS 入口。
+#
+# 可配置环境变量（都有默认值，未设置时即下方示例 10.8.0.12:7778 -> 10.8.0.12:8443）：
+#   NF_HTTPS_PUBLIC_IP        浏览器最终访问的 HTTPS 入口 IP/主机名；同时是证书名与 default_sni
+#   NF_HTTPS_PORT             HTTPS 监听端口（容器内与本文件站点地址一致）
+#   NF_HTTPS_BIND             本进程实际 bind 的地址；容器内保持 0.0.0.0，对外可达性由 compose 的宿主 IP 决定
+#   NF_HTTP_UPSTREAM_HOST     设备原 HTTP 服务的固定主机（设备本机/可信 LAN/VPN 内可达）
+#   NF_HTTP_UPSTREAM_PORT     设备原 HTTP 服务的固定端口
+#
+# CA 与证书数据落在 Caddy 的 data 目录：原生运行可用 XDG_DATA_HOME 指向自有目录，
+# 公共根证书位于 <data>/caddy/pki/authorities/local/root.crt。私钥只留在该目录，不导出。
+{
+	# 不开启管理端点（2019 不监听、不发布）
+	admin off
+	# 不创建 80 -> 443 的重定向监听；本前置只对外暴露 HTTPS 端口
+	auto_https disable_redirects
+	# 不尝试写入系统/浏览器信任库；信任由使用者手动分发公共根证书完成
+	skip_install_trust
+	# 站点地址显式带端口，这里保持同值，避免任何自动生成的额外监听
+	https_port {$NF_HTTPS_PORT:8443}
+	# 本前置只走 TCP：默认还会额外监听 HTTP/3 的 UDP，但 compose 只发布 TCP 端口，
+	# 多余的 UDP 监听既不可达也没有意义，故显式限定为 h1/h2。
+	servers {
+		protocols h1 h2
+	}
+	# 裸 IP 访问（curl/浏览器对 IP 字面量通常不发 SNI）时按此名选证书，
+	# 否则 certmagic 会按容器/本机 LocalAddr 查找失败并直接回 TLS alert。
+	default_sni {$NF_HTTPS_PUBLIC_IP:10.8.0.12}
+	log {
+		output stderr
+		level INFO
+		# 反向代理错误路径（例如上游 502）会把整个 request 打进错误日志。
+		# Caddy 只对 Authorization / Cookie 自动脱敏，其它自定义头
+		# （如 X-Narrafork-Plugin-Session 这类插件会话令牌）以及 URL query
+		# 都会原样记录，等于凭据落盘。这里整块删除 request，保留
+		# error / msg / duration / status 供诊断；不记录请求体。
+		format filter {
+			wrap json
+			fields {
+				request delete
+			}
+		}
+	}
+}
+
+# 精确站点：只有一个 HTTPS 入口，不使用通配符，也不接受任意 Host。
+https://{$NF_HTTPS_PUBLIC_IP:10.8.0.12}:{$NF_HTTPS_PORT:8443} {
+	# 站点地址用于证书名与 Host 匹配；容器内不存在该 IP，故 bind 到容器网络栈。
+	# 对外只由 compose 的 "<宿主IP>:<端口>:<端口>" 映射暴露，不默认开放所有网卡。
+	bind {$NF_HTTPS_BIND:0.0.0.0}
+
+	# 本前置自签的私有 CA；证书覆盖 NF_HTTPS_PUBLIC_IP（含 IP SAN），私钥只留在 data 目录
+	tls internal
+
+	# 固定上游是设备原 HTTP 端口，不使用本容器/本机的 127.0.0.1 冒充设备
+	reverse_proxy http://{$NF_HTTP_UPSTREAM_HOST:10.8.0.12}:{$NF_HTTP_UPSTREAM_PORT:7778} {
+		# 流式响应 / SSE / WebSocket 不做响应缓冲；Caddy 自动处理 Upgrade
+		flush_interval -1
+	}
+
+	# 只原样转发设备的安全响应头。不要在此删除 CSP、改写 X-Frame-Options、
+	# 放宽 CORS 或伪造任意 Origin 来「强行嵌入」；设备侧仍须把正式工作台 origin
+	# 与自身 HTTPS 入口精确加入 allowedOrigins。
+	# 若设备校验 Host，应在设备侧允许这个 HTTPS 入口，而不是在代理里改写 Host。
+}

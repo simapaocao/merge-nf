@@ -137,6 +137,64 @@ NF 侧入口可参考 [deploy/Caddyfile.nf.example](deploy/Caddyfile.nf.example)
 
 不要通过关闭 TLS 校验、删除 CSP、全局允许所有 origin 或空 cookie 策略来强行接入。
 
+### 只提供 HTTP 的 NF：加一层独立 HTTPS 前置
+
+有些 NF 只监听 `http://10.8.0.12:7778` 这类 HTTP 入口。做法**不是**改设备服务，而是在它前面另起一层独立 HTTPS 前置，把 HTTP 包成 `https://10.8.0.12:8443`；设备原 HTTP 服务保持原样、不重启、不替换。
+
+前置模板在 [deploy/http-device-https](deploy/http-device-https)，三件：`Caddyfile`、`compose.yaml`、`settings.env.example`。工作台「添加实例 / 编辑实例」中的「设备只有 HTTP 时的 HTTPS 前置方案」面板可直接下载这三份文件，下载内容与该目录逐字节相同。**填地址不会自动安装前置**，仍需按下面步骤自己部署。
+
+最短步骤：
+
+```sh
+# 1. 在一个空目录里放好这三份文件，然后只编辑 settings.env.example
+# 2. 启动前置
+docker compose --env-file settings.env.example up -d
+```
+
+`settings.env.example` 里共 5 个变量，示例文件已全部填好；其中 `NF_HTTPS_PUBLIC_IP`、`NF_HTTPS_HOST_BIND`、`NF_HTTP_UPSTREAM_HOST` 必须按实际环境显式设置，`NF_HTTPS_PORT` 与 `NF_HTTP_UPSTREAM_PORT` 有默认值。`10.8.0.12:7778 → 10.8.0.12:8443` 就是可直接跑通的示例：
+
+| 变量 | 含义 |
+| --- | --- |
+| `NF_HTTPS_PUBLIC_IP` | 必填。浏览器最终访问的 HTTPS 入口 IP/主机名；同时是证书名与 `default_sni` |
+| `NF_HTTPS_PORT` | HTTPS 监听端口，宿主机与容器内一致；默认 `8443` |
+| `NF_HTTPS_HOST_BIND` | 必填。宿主机绑定的受信地址，决定谁能连上前置 |
+| `NF_HTTP_UPSTREAM_HOST` / `NF_HTTP_UPSTREAM_PORT` | 必填的设备原 HTTP 固定地址；端口默认 `7778` |
+
+`NF_HTTPS_HOST_BIND` 只填一个受信地址，不要填 `0.0.0.0` 对外敞开。网关部署时 `NF_HTTPS_PUBLIC_IP` 可与 `NF_HTTP_UPSTREAM_HOST` 不同。另有一个 `NF_HTTPS_BIND` 由 compose 固定为容器内 `0.0.0.0`，不需要也不应该在 env 里填；只有原生运行 Caddy 时才需要自己设置它。
+
+同一个网关要给多台设备各起一套时，把每套放进不同目录，或用 `-p` 指定不同项目名，并让各自的 `NF_HTTPS_PORT` 不同。容器名和数据卷都按项目名自动隔离，不会互相覆盖，也不会共用 CA 与证书。
+
+启动后按顺序验证：
+
+1. 浏览器打开 `https://10.8.0.12:8443`，确认能加载设备页面。证书由前置自建 CA 签发（`tls internal`），浏览器首次需信任该根证书。
+2. 目标 NF 的 `allowedOrigins` 里精确加入**正式工作台 origin** 与**这个 HTTPS 入口 origin**，不要用 `*`。
+3. 回到工作台填写 HTTPS 入口地址，再按[添加一台 NF](#添加一台-nf)正常配对。
+
+边界与维护：
+
+- **HTTP 到前置这一段只走设备本机、可信局域网或 VPN。** 带登录凭据的 HTTP 不要跨公网；公网只访问前置的 HTTPS 入口。
+- 前置只原样转发设备的安全响应头，不删除 CSP、不改写 `X-Frame-Options`、不放宽 CORS、不伪造 Origin 来强行嵌入。
+- 前置自带 CA，两个方向要分别配置：插件到中心的信任，在插件设置里贴中心 CA；浏览器信任前置，需要把前置的**公共根证书**导入浏览器/系统。
+- 公共根证书在 Caddy data 目录下的 `pki/authorities/local/root.crt`（容器内即 `/data/caddy/pki/authorities/local/root.crt`）。**只分发这张公共证书，不导出私钥**；`front-data` 卷丢失等于私钥丢失，需要重新签发并重新信任。
+- 容器只用非 root、只读根、丢弃全部能力，端口只绑一个受信地址，不使用 host 网络，也不改动其它容器或 Docker 全局配置。
+
+没有 Docker 时，同一份 `Caddyfile` 可直接给原生 Caddy（Windows/Linux）用。`NF_HTTPS_BIND` 在原生运行下就是真实监听地址，只填一个受信网卡地址，并用防火墙限制来源：
+
+```powershell
+# Windows（PowerShell）：data/CA 留在自有目录，不写系统全局位置
+$env:XDG_DATA_HOME="$PWD\.caddy-data"
+$env:NF_HTTPS_PUBLIC_IP="10.8.0.12"; $env:NF_HTTPS_PORT="8443"; $env:NF_HTTPS_BIND="10.8.0.12"
+$env:NF_HTTP_UPSTREAM_HOST="10.8.0.12"; $env:NF_HTTP_UPSTREAM_PORT="7778"
+caddy run --config Caddyfile --adapter caddyfile
+```
+
+```sh
+# Linux
+XDG_DATA_HOME="$PWD/.caddy-data" NF_HTTPS_PUBLIC_IP=10.8.0.12 NF_HTTPS_PORT=8443 \
+NF_HTTPS_BIND=10.8.0.12 NF_HTTP_UPSTREAM_HOST=10.8.0.12 NF_HTTP_UPSTREAM_PORT=7778 \
+caddy run --config Caddyfile --adapter caddyfile
+```
+
 ## 添加一台 NF
 
 1. **准备原站入口。** 让浏览器可访问独立 HTTPS NF 地址，如 `https://nf-a.example.net`。在 NF 支持的嵌入配置中，精确允许中心 origin `https://hub.example.net`（例如受支持的 `allowedOrigins` 配置），使 CSP `frame-ancestors` 允许该中心；不要填 `*`。无法安全允许嵌入时使用新窗口。
@@ -149,6 +207,14 @@ NF 侧入口可参考 [deploy/Caddyfile.nf.example](deploy/Caddyfile.nf.example)
 
 连接器不跟随 HTTP 重定向。若另行使用「IP 仅上传入口」，必须显式部署额外的 connector-only 代理路由、正确 Host 和证书校验；仓库模板并不自带这种入口，不能把某次部署的特殊地址当通用默认值。
 
+## 三种操作怎么选
+
+- **新增设备**：添加实例 → 保存 → 生成一次性配对码 → 在设备插件的网页设置中填写中心地址与该码，完成一次配对。默认不发布任何摘要。
+- **同一台设备只改 IP / 端口**：直接编辑保存，原授权、配对码与发布范围保留，不需要重新配对；浏览器按新地址加载页面，嵌入状态会回到「待验证」，重新确认一次即可。
+- **换成另一台实际设备、调整发布范围或更换中心地址**：先撤销 → 再重新配对，不能在旧授权下静默沿用。撤销只废止令牌与中心摘要，不修改原站会话。
+
+设备只有 HTTP 时，按[只提供 HTTP 的 NF](#只提供-http-的-nf加一层独立-https-前置)先部署前置，再把前置的 HTTPS 地址填为访问地址。
+
 ## 维护、撤销与恢复
 
 ### 授权轮换
@@ -156,7 +222,8 @@ NF 侧入口可参考 [deploy/Caddyfile.nf.example](deploy/Caddyfile.nf.example)
 - **中心撤销**会作废旧代上报凭据、清除中心摘要，不删除或修改原 NF 会话；中心「删除」还会移除实例配置。
 - 暂停、停用、卸载插件或清除本地配对都**不等于中心撤销**，已发出的请求也可能到达。
 - 更换插件中心基址、CA、范围或项目名称能力：先在旧中心撤销 → 清除本地配对 → 保存并确认新设置 → 在中心生成新码 → 重新配对。仅修改周期不需要换授权。
-- 活跃实例或仍有有效配对码的实例更换 `browserBaseUrl`：先撤销 → 修改浏览器基址 → 生成新码并重新配对；未先撤销会返回 `REVOKE_FIRST`，修改后不会自动恢复旧授权。
+- 同一实例只更换浏览器入口的 IP/端口（同一台设备、同一中心、发布权限不变）：直接编辑保存即可，原摘要授权保留；浏览器侧地址变了，嵌入状态会回到「待验证」，重新确认一次嵌入即可。
+- 更换真实设备、更换中心，或改变发布范围/权限：仍须先撤销 → 重新配对，不能在旧授权下静默沿用。
 - NF 重启可由 `onStartup` 触发激活；只有已配对、设置与凭据绑定一致、已确认非空范围、未暂停且无需撤销时才恢复同步。已暂停的实例不会因重启自动恢复；重启重新采集，不补发旧包。
 - 更新插件：重新构建/打包，再到各 NF 手动更新并核验激活状态。不会自动上传；已有凭据能否继续使用取决于绑定与授权状态。
 
@@ -224,6 +291,7 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml -f deploy/compose.p
 | [packages/protocol](packages/protocol) | 摘要、URL、配对与网页 API 契约 |
 | [packages/nf-connector](packages/nf-connector) | NF 连接器源码、设置面板及插件清单 |
 | [deploy](deploy) | Linux 运行脚本、Docker / Caddy 模板与归档工具 |
+| [deploy/http-device-https](deploy/http-device-https) | 给只提供 HTTP 的 NF 加 HTTPS 前置的三件模板；工作台可下载同一份内容 |
 | `packages/nf-connector/dist/local.nf-hub.connector-0.1.2.nfplugin` | 运行 `bun run --cwd packages/nf-connector package` 后生成，在 NF 插件管理中安装 |
 | `artifacts/nf-workbench-0.1.0.zip` | 运行下述源码归档命令后生成，含源码、网页构建及连接器；并非免依赖可执行程序 |
 | `artifacts/nf-workbench-0.1.0.zip.sha256` / `artifacts/nf-workbench-0.1.0.manifest.json` | 由同次归档生成的 SHA-256 和文件清单 |

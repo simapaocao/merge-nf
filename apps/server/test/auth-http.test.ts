@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { LIMITS, changesWithInstancesSchema, instancesSchema, pairingSchema, pairResponseSchema, routes, runResponseSchema, snapshotHash } from '@nf-hub/protocol';
+import { LIMITS, changesWithInstancesSchema, instanceSchema, instancesSchema, pairingSchema, pairResponseSchema, routes, runResponseSchema, snapshotHash } from '@nf-hub/protocol';
 import { browserBase, readConfig } from '../src/config';
 import { BASE, all, cfg, httpFixture, makeActor, publish, summary } from './fixture';
 
@@ -40,6 +40,25 @@ test('仅网页可以创建实例和签码，配对单用，Bearer不能读看�
   expect((await h.req(routes.pairing(id),'POST',undefined,h.writeHeaders)).status).toBe(409);
   expect((await h.req(routes.revoke(id),'POST',undefined,h.writeHeaders)).status).toBe(200);
   expect((await h.req(routes.snapshot(lease.runId),'POST',data,bearer)).status).toBe(401);
+});
+test('管理员网页改浏览器地址后旧令牌继续同步；来源与CSRF校验不变',async()=>{
+  const created=await h.req(routes.instances,'POST',{alias:'demo',browserBaseUrl:'https://demo.example.invalid'},h.writeHeaders);
+  expect(created.status).toBe(201); const {id}=await created.json() as {id:string};
+  const issued=pairingSchema.parse(await (await h.req(routes.pairing(id),'POST',undefined,h.writeHeaders)).json());
+  const req={protocolVersion:1,code:issued.code,scope:all,confirmed:true,connectorVersion:'0.1.0',capabilities:['summary.v1']};
+  const bound=pairResponseSchema.parse(await (await h.req(routes.pair,'POST',req)).json()), bearer={authorization:`Bearer ${bound.token}`};
+  const url={browserBaseUrl:'https://10.8.0.2:7778',embedStatus:'verified'};
+  expect((await h.req(routes.instance(id),'PATCH',url,{cookie:h.cookie,origin:cfg.publicUrl.origin})).status).toBe(403);
+  expect((await h.req(routes.instance(id),'PATCH',url,{...h.writeHeaders,origin:'https://elsewhere.example.invalid'})).status).toBe(403);
+  expect((await h.req(routes.instance(id),'PATCH',url,bearer)).status).toBe(401);
+  const patched=await h.req(routes.instance(id),'PATCH',url,h.writeHeaders);
+  expect(patched.status).toBe(200);
+  expect(instanceSchema.parse(await patched.json())).toMatchObject({browserBaseUrl:'https://10.8.0.2:7778',embedStatus:'unverified',generation:bound.generation,connection:'connected'});
+  const runBody={protocolVersion:1,generation:bound.generation};
+  const lease=runResponseSchema.parse(await (await h.req(routes.runs,'POST',runBody,bearer)).json());
+  const data={...runBody,runId:lease.runId,count:0,hash:await snapshotHash([]),summaries:[]};
+  expect((await h.req(routes.snapshot(lease.runId),'POST',data,bearer)).status).toBe(200);
+  expect((await h.req(routes.pairing(id),'POST',undefined,h.writeHeaders)).status).toBe(409);
 });
 test('ETag 不缓存跨时间的过期结果；变更端点也必须认证',async()=>{
   const a=makeActor(h.db,'alpha',BASE); await publish(h.db,a,[summary('a')],BASE);
