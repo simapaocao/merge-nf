@@ -23,7 +23,7 @@
 ## 环境与适用范围
 
 - 使用 **Bun 1.3.14**；依赖版本以 [package.json](package.json) 和 [bun.lock](bun.lock) 为准。
-- 已验证组合：**NF 0.9.14 / 0.9.15 + 连接器 0.1.2**。清单中的 API/运行时范围不代表所有 NF 版本均已验证。
+- 基础摘要已验证组合：**NF 0.9.14 / 0.9.15 + 连接器 0.1.2**。当前连接器源码版本为 **0.1.3**，可选活动摘要需宿主提供对应只读查询；旧 0.1.2 设备继续使用基础摘要。清单中的 API/运行时范围不代表所有 NF 版本均已验证。
 - Docker 方式面向 Linux，需要 Docker Engine 和 Compose v2。
 - 源码归档工具与网页归档回归测试需要 **Python 3.11+**，并确保 `python` 命令在 `PATH` 中可用。
 - 生产环境必须 HTTPS。每台 NF 使用独立 origin；**Hub 与每台 NF 必须使用不同 hostname，不能只换端口**，因为同 hostname 的 cookie 不按端口隔离。
@@ -199,13 +199,27 @@ caddy run --config Caddyfile --adapter caddyfile
 
 1. **准备原站入口。** 让浏览器可访问独立 HTTPS NF 地址，如 `https://nf-a.example.net`。在 NF 支持的嵌入配置中，精确允许中心 origin `https://hub.example.net`（例如受支持的 `allowedOrigins` 配置），使 CSP `frame-ancestors` 允许该中心；不要填 `*`。无法安全允许嵌入时使用新窗口。
 2. **中心添加实例。** 登录 Hub →「连接管理」→「添加实例」，填写别名及浏览器使用的 NF 基址 `browserBaseUrl`，保存后点击「生成配对码」。一次性码为 22 字符，有效期 10 分钟；它不是 NF 登录密码。
-3. **安装并激活连接器。** 在仓库根目录先运行 `bun run --cwd packages/nf-connector package` 构建并打包连接器，再在该 NF 的插件管理中安装本地产物 `packages/nf-connector/dist/local.nf-hub.connector-0.1.2.nfplugin`，确认权限后启用。若仍为 `inactive`，显式激活或打开「摘要连接设置」触发激活；启用可能只保存 desired 状态。
+3. **安装并激活连接器。** 在仓库根目录先运行 `bun run --cwd packages/nf-connector package` 构建并打包连接器，再在该 NF 的插件管理中安装本地产物 `packages/nf-connector/dist/local.nf-hub.connector-0.1.3.nfplugin`，确认权限后启用。若仍为 `inactive`，显式激活或打开「摘要连接设置」触发激活；启用可能只保存 desired 状态。
 4. **填写中心地址。** 在插件设置中填 `https://hub.example.net`，即中心 API 基址，**不是 NF 自己的地址或自己的 `:7778`**。通常与浏览器访问中心的 URL 相同。插件从 NF 主机出站，内部域名也必须在 NF 主机可解析；浏览器的 hosts 文件不会自动作用于 NF。
 5. **按需配置信任。** 公共 HTTPS 通常使用运行时默认 CA。自建 CA 时，只粘贴单张 CA 公共 PEM，不能是私钥、服务器叶证书或证书链；通过独立可信渠道核对该证书 **DER 的 SHA-256 指纹**。插件专用 CA 仅用于它到此中心的请求，仍验证证书链和主机名，不修改浏览器/系统信任。
 6. **选择范围并同意。** 选择指定项目（可额外包含无项目独立会话）、指定会话，或明确确认可能包含隐藏项/子代理的整台范围；ID 每行一个、精确匹配。归档、项目名称是独立选项。确认同意发布摘要，然后「保存设置并保持暂停」。空范围不能配对。
 7. **配对和验证。** 输入新码，点击「确认配对并开始同步」。首次完整同步后中心应出现摘要；默认每 30 秒同步，可设 5–3600 秒。进入工作台时，仍须在对应 NF 原站独立登录；首次登录后可刷新原站回到目标会话。
 
 连接器不跟随 HTTP 重定向。若另行使用「IP 仅上传入口」，必须显式部署额外的 connector-only 代理路由、正确 Host 和证书校验；仓库模板并不自带这种入口，不能把某次部署的特殊地址当通用默认值。
+
+### 可选活动摘要
+
+连接器 0.1.3 的活动摘要**默认关闭**，与基础摘要使用相同的已发布会话范围，不修改已有配对、令牌或范围。宿主须提供 `narrafork.narrators.activity` 只读查询，中心须支持活动接收端点；升级插件本身不会给旧宿主补上该能力。
+
+1. 打开「摘要连接设置」中的「需要处理与后台活动（可选）」。
+2. 勾选「同步待回复、确认、错误、未读及后台活动状态（不含内容）」，点击「保存活动状态选项」。
+3. 若基础同步已暂停，先恢复上报；活动状态从下一轮基础摘要成功发布后开始同步。
+
+活动摘要仅含已发布会话 ID、待回复/确认/错误/未读布尔状态和后台活动数，不含消息正文、审批内容或权限明细。「需要处理」是会话级状态，不是当前用户的个人收件箱；**操作权限以原站登录账号为准**，回复、审批和执行仍回原站进行。
+
+未提供或无法读取增强能力时显示「未提供」或 `—`，不把缺失数据当成 0，也不把 `waiting` 当待回复。仅部分实例提供增强时，界面显示已知数量和覆盖提示，不当作全局完整总数；基础摘要同步继续可用。
+
+关闭该选项后不再采集活动；若已有中心活动记录，将在下一轮基础同步成功后撤回。暂停或离线时无法即时撤回，旧记录会按中心接收时间过期；需要立即废止上报授权时，在中心撤销该实例。
 
 ## 三种操作怎么选
 
@@ -292,7 +306,7 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml -f deploy/compose.p
 | [packages/nf-connector](packages/nf-connector) | NF 连接器源码、设置面板及插件清单 |
 | [deploy](deploy) | Linux 运行脚本、Docker / Caddy 模板与归档工具 |
 | [deploy/http-device-https](deploy/http-device-https) | 给只提供 HTTP 的 NF 加 HTTPS 前置的三件模板；工作台可下载同一份内容 |
-| `packages/nf-connector/dist/local.nf-hub.connector-0.1.2.nfplugin` | 运行 `bun run --cwd packages/nf-connector package` 后生成，在 NF 插件管理中安装 |
+| `packages/nf-connector/dist/local.nf-hub.connector-0.1.3.nfplugin` | 运行 `bun run --cwd packages/nf-connector package` 后生成，在 NF 插件管理中安装 |
 | `artifacts/nf-workbench-0.1.0.zip` | 运行下述源码归档命令后生成，含源码、网页构建及连接器；并非免依赖可执行程序 |
 | `artifacts/nf-workbench-0.1.0.zip.sha256` / `artifacts/nf-workbench-0.1.0.manifest.json` | 由同次归档生成的 SHA-256 和文件清单 |
 

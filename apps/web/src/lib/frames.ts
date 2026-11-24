@@ -23,6 +23,16 @@ export function touchFrame(entries:readonly FrameEntry[],grant:FrameIdentity,tar
   const next={...grant,target:target??existing?.target??grant.browserBaseUrl,revision:existing?.revision??0};
   return [...entries.filter(entry=>entry.instanceId!==grant.instanceId),next].slice(-capacity);
 }
+/** Opened tabs are a view; a closed tab must release its frame even when the LRU still has room. */
+export function keepOpenedFrames(entries:readonly FrameEntry[],openIds:readonly string[]|null|undefined):FrameEntry[] {
+  if(!openIds) return [...entries];
+  const open=new Set(openIds);
+  return entries.filter(entry=>open.has(entry.instanceId));
+}
+/** Stable render order so a surviving iframe is never moved in the DOM, which would reload it. */
+export function sortFramesForRender(entries:readonly FrameEntry[]):FrameEntry[] {
+  return [...entries].sort((a,b)=>a.instanceId<b.instanceId?-1:a.instanceId>b.instanceId?1:0);
+}
 export function refreshFrame(entries:readonly FrameEntry[],grant:FrameIdentity):FrameEntry[] {
   return entries.map(entry=>identityKey(entry)===identityKey(grant)?{...entry,revision:entry.revision+1}:entry);
 }

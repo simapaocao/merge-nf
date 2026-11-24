@@ -1,18 +1,31 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { changesWithInstancesSchema, instancesSchema, overviewSchema, projectsSchema, routes, sessionsSchema, type ChangesWithInstances, type SessionStatus } from '@nf-hub/protocol';
+import { SESSION_GROUP_PREVIEW, changesWithInstancesSchema, instanceActivitySchema, instancesSchema, overviewSchema, projectsSchema, routes, sessionGroupsSchema, sessionsSchema, type ChangesWithInstances, type SessionGroup, type SessionStatus } from '@nf-hub/protocol';
 import { api } from '../lib/api';
 import { ApiError } from '../lib/errors';
 import { privateKey, useAppState } from './useAppState';
 
-export type SessionFilters = { q:string; instanceId:string; status:SessionStatus|''; projectId:string; standalone:boolean; includeArchived:boolean; page:number; pageSize:number };
-export const initialFilters:SessionFilters={q:'',instanceId:'',status:'',projectId:'',standalone:false,includeArchived:false,page:1,pageSize:50};
-export function sessionsPath(filters:SessionFilters):string {
-  const params=new URLSearchParams({page:String(Math.max(1,filters.page)),pageSize:String(Math.min(100,Math.max(1,filters.pageSize)))});
+export type SessionFilters = { q:string; instanceId:string; status:SessionStatus|''; projectId:string; standalone:boolean; includeArchived:boolean; page:number; pageSize:number; group?:SessionGroup|'' };
+export const initialFilters:SessionFilters={q:'',instanceId:'',status:'',projectId:'',standalone:false,includeArchived:false,page:1,pageSize:50,group:''};
+/** Filters shared by the paged list and the card preview. Paging and the group selector are not included. */
+function filterParams(filters:SessionFilters):URLSearchParams {
+  const params=new URLSearchParams();
   if(filters.q.trim()) params.set('q',filters.q.trim()); if(filters.instanceId) params.set('instanceId',filters.instanceId);
   if(filters.status) params.set('status',filters.status); if(filters.projectId && filters.instanceId && !filters.standalone) params.set('projectId',filters.projectId);
   if(filters.standalone) params.set('standalone','true'); if(filters.includeArchived) params.set('includeArchived','true');
+  return params;
+}
+export function sessionsPath(filters:SessionFilters):string {
+  const params=filterParams(filters);
+  params.set('page',String(Math.max(1,filters.page))); params.set('pageSize',String(Math.min(100,Math.max(1,filters.pageSize))));
+  if(filters.group) params.set('group',filters.group);
   return `${routes.sessions}?${params}`;
+}
+/** Card preview path: one bounded page per section, so page/group never leak into it. */
+export function sessionGroupsPath(filters:SessionFilters,previewSize=SESSION_GROUP_PREVIEW):string {
+  const params=filterParams(filters);
+  params.set('previewSize',String(Math.min(100,Math.max(1,previewSize))));
+  return `${routes.sessionGroups}?${params}`;
 }
 type Schema<T>={safeParse:(v:unknown)=>{success:true;data:T}|{success:false}};
 function usePrivateQuery<T>(kind:string,path:string,schema:Schema<T>,enabled=true) {
@@ -25,6 +38,12 @@ function usePrivateQuery<T>(kind:string,path:string,schema:Schema<T>,enabled=tru
 export function useInstances() {return usePrivateQuery('instances',routes.instances,instancesSchema);}
 export function useOverview() {return usePrivateQuery('overview',routes.overview,overviewSchema);}
 export function useSessions(filters:SessionFilters) {return usePrivateQuery('sessions',sessionsPath(filters),sessionsSchema);}
+/** Tab-bar statistics: per instance, independent of the current list filters. */
+export function useInstanceActivity() {return usePrivateQuery('instanceActivity',routes.instanceActivity,instanceActivitySchema);}
+/** Card sections. Counts cover the whole filtered set; each section carries at most `previewSize` rows. */
+export function useSessionGroups(filters:SessionFilters,previewSize=SESSION_GROUP_PREVIEW) {
+  return usePrivateQuery('sessionGroups',sessionGroupsPath(filters,previewSize),sessionGroupsSchema);
+}
 export function useProjects(instanceId:string,q:string) {
   const params=new URLSearchParams({instanceId,page:'1',pageSize:'100'}); if(q.trim()) params.set('q',q.trim());
   return usePrivateQuery('projects',`${routes.projects}?${params}`,projectsSchema,!!instanceId);

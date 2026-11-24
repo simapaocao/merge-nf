@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { changesQuerySchema, createInstanceSchema, loginSchema, projectsQuerySchema, routes, sessionsQuerySchema, updateInstanceSchema } from '@nf-hub/protocol';
+import { changesQuerySchema, createInstanceSchema, loginSchema, projectsQuerySchema, routes, sessionGroupsQuerySchema, sessionsQuerySchema, updateInstanceSchema } from '@nf-hub/protocol';
 import { login, logout, sessionCookie, verifyCsrf, verifyOrigin, webSession } from './auth';
-import { changes, overview, projects, sessions } from './dashboard';
+import { changes, instanceActivity, overview, projects, sessionGroups, sessions } from './dashboard';
 import { fail, validated } from './errors';
 import { noBody, queryParams, type Router, type Services } from './http-types';
 import { createInstance, deleteInstance, instanceDto, instanceRecord, listInstances, updateInstance } from './instances';
@@ -41,6 +41,8 @@ export function webRoutes(app: Router, {db,config,clock,admission}: Services) {
   app.post(`${routes.instances}/:id/revoke`,c => { noBody(c); return c.json(revoke(db,validated(z.uuid(),c.req.param('id')),clock())); });
   app.get(routes.overview,c => c.json(overview(db,clock())));
   app.get(routes.sessions,c => c.json(sessions(db,validated(sessionsQuerySchema,queryParams(c)),clock())));
+  app.get(routes.instanceActivity,c => { validated(z.strictObject({}),queryParams(c)); return c.json(instanceActivity(db,clock())); });
+  app.get(routes.sessionGroups,c => c.json(sessionGroups(db,validated(sessionGroupsQuerySchema,queryParams(c)),clock())));
   app.get(routes.projects,c => c.json(projects(db,validated(projectsQuerySchema,queryParams(c)))));
   app.get(routes.changes,c => {
     const {instances} = validated(changesQuerySchema,queryParams(c));

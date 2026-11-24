@@ -7,7 +7,7 @@ import { Icon } from '../components/Icon';
 import { useAppState } from '../hooks/useAppState';
 import { api } from '../lib/api';
 import { embedLabels } from '../lib/format';
-import { authorizedFrames, frameKey, identityKey, pruneFrames, refreshFrame, touchFrame, type FrameEntry } from '../lib/frames';
+import { authorizedFrames, frameKey, identityKey, keepOpenedFrames, pruneFrames, refreshFrame, sortFramesForRender, touchFrame, type FrameEntry } from '../lib/frames';
 import { isMixedContent, navigate, type LocationIntent } from '../lib/navigation';
 
 export function resolveWorkbenchTarget({ base, sessionId, authorized, changedIdentity, retained, remembered }: { base: string; sessionId?: string; authorized: boolean; changedIdentity: boolean; retained?: string; remembered?: string }) {
@@ -17,7 +17,12 @@ export function resolveWorkbenchTarget({ base, sessionId, authorized, changedIde
   return { explicit, target: explicit ?? retained ?? remembered ?? base };
 }
 
-export function WorkbenchPage({ instances, loaded, intent, visible, toolbarTarget }: { instances: Instance[]; loaded: boolean; intent: LocationIntent; visible: boolean; toolbarTarget?: HTMLElement | null }) {
+export function WorkbenchPage({ instances, loaded, intent, visible, toolbarTarget, openIds, onMountedChange }: {
+  instances: Instance[]; loaded: boolean; intent: LocationIntent; visible: boolean; toolbarTarget?: HTMLElement | null;
+  /** Opened tabs. A closed tab is unmounted here even when it would still fit the LRU capacity. */
+  openIds?: readonly string[];
+  onMountedChange?: (instanceIds: readonly string[]) => void;
+}) {
   const { revision, removedInstance } = useAppState();
   const client = useQueryClient();
   const [frames, setFrames] = useState<FrameEntry[]>([]);
@@ -27,38 +32,45 @@ export function WorkbenchPage({ instances, loaded, intent, visible, toolbarTarge
   const closeDetails = useCallback(() => setShowDetails(false), []);
   useEffect(() => { setShowDetails(false); }, [intent.instanceId, visible]);
   const selected = instances.find(item => item.id === intent.instanceId);
-  const grants=useMemo(()=>authorizedFrames(loaded?instances:[],window.location.origin),[instances,loaded]);
+  const grants = useMemo(() => authorizedFrames(loaded ? instances : [], window.location.origin), [instances, loaded]);
   // LRU order is for eviction only. Moving a surviving iframe in the DOM can reload its document.
-  const rendered=useMemo(()=>pruneFrames(frames,grants).sort((a,b)=>a.instanceId<b.instanceId?-1:a.instanceId>b.instanceId?1:0),[frames,grants]);
-  const grant=selected ? grants.get(selected.id) : undefined, key=grant ? identityKey(grant) : '';
-  const remembered=useRef(new Map<string,string>());
-  const lastIntent=useRef<{id:string;session:string|undefined;key:string}|null>(null);
-  const changedIdentity=!!(grant && intent.sessionId && lastIntent.current?.id===grant.instanceId && lastIntent.current.session===intent.sessionId && lastIntent.current.key!==key);
-  let base='', target='', explicit:string|undefined, urlValid=true;
+  const rendered = useMemo(() => sortFramesForRender(keepOpenedFrames(pruneFrames(frames, grants), openIds)), [frames, grants, openIds]);
+  const grant = selected ? grants.get(selected.id) : undefined, key = grant ? identityKey(grant) : '';
+  const remembered = useRef(new Map<string, string>());
+  const lastIntent = useRef<{ id: string; session: string | undefined; key: string } | null>(null);
+  const changedIdentity = !!(grant && intent.sessionId && lastIntent.current?.id === grant.instanceId && lastIntent.current.session === intent.sessionId && lastIntent.current.key !== key);
+  let base = '', target = '', explicit: string | undefined, urlValid = true;
   if (selected) {
     try {
-      base=normalizeBrowserBaseUrl(selected.browserBaseUrl,window.location.origin);
-      ({ explicit, target } = resolveWorkbenchTarget({ base, sessionId: intent.sessionId, authorized: !!grant, changedIdentity, retained: rendered.find(f=>f.instanceId===selected.id)?.target, remembered: remembered.current.get(key) }));
-    } catch { urlValid=false; }
+      base = normalizeBrowserBaseUrl(selected.browserBaseUrl, window.location.origin);
+      ({ explicit, target } = resolveWorkbenchTarget({ base, sessionId: intent.sessionId, authorized: !!grant, changedIdentity, retained: rendered.find(f => f.instanceId === selected.id)?.target, remembered: remembered.current.get(key) }));
+    } catch { urlValid = false; }
   }
+  // Restored tabs win: only an empty tab list falls back to the first instance.
   useEffect(() => {
-    if (visible && loaded && !intent.instanceId && instances[0]) navigate({ view: 'workbench', instanceId: instances[0].id });
-  }, [visible, loaded, intent.instanceId, instances]);
+    if (visible && loaded && !intent.instanceId && !openIds?.length && instances[0]) navigate({ view: 'workbench', instanceId: instances[0].id });
+  }, [visible, loaded, intent.instanceId, instances, openIds]);
   useEffect(() => {
-    setFrames(value => {const next=pruneFrames(value,grants);return next.length===value.length?value:next;});
-    const activeKeys=new Set([...grants.values()].map(identityKey));
-    for(const id of remembered.current.keys()) if(!activeKeys.has(id)) remembered.current.delete(id);
-  },[grants]);
+    setFrames(value => { const next = pruneFrames(value, grants); return next.length === value.length ? value : next; });
+    const activeKeys = new Set([...grants.values()].map(identityKey));
+    for (const id of remembered.current.keys()) if (!activeKeys.has(id)) remembered.current.delete(id);
+  }, [grants]);
   useEffect(() => {
-    if(removedInstance) setFrames(value=>value.filter(frame=>frame.instanceId!==removedInstance.id));
-  },[removedInstance]);
+    if (removedInstance) setFrames(value => value.filter(frame => frame.instanceId !== removedInstance.id));
+  }, [removedInstance]);
+  // A closed tab frees its frame immediately so a later reopen starts from a fresh document.
   useEffect(() => {
-    if(!visible || !grant || !urlValid) return;
-    if(changedIdentity){navigate({view:'workbench',instanceId:grant.instanceId});return;}
-    const desired=explicit??remembered.current.get(key)??grant.browserBaseUrl;
-    remembered.current.set(key,desired);lastIntent.current={id:grant.instanceId,session:intent.sessionId,key};
-    setFrames(value=>touchFrame(value,grant,desired));setError(null);
-  },[visible,key,explicit,intent.sessionId,urlValid,changedIdentity]);
+    setFrames(value => { const next = keepOpenedFrames(value, openIds); return next.length === value.length ? value : next; });
+  }, [openIds]);
+  useEffect(() => {
+    if (!visible || !grant || !urlValid) return;
+    if (changedIdentity) { navigate({ view: 'workbench', instanceId: grant.instanceId }); return; }
+    const desired = explicit ?? remembered.current.get(key) ?? grant.browserBaseUrl;
+    remembered.current.set(key, desired); lastIntent.current = { id: grant.instanceId, session: intent.sessionId, key };
+    setFrames(value => touchFrame(value, grant, desired)); setError(null);
+  }, [visible, key, explicit, intent.sessionId, urlValid, changedIdentity]);
+  const mountedIds = useMemo(() => rendered.map(frame => frame.instanceId), [rendered]);
+  useEffect(() => { onMountedChange?.(mountedIds); }, [mountedIds, onMountedChange]);
 
   const setEmbedStatus = async (embedStatus: 'verified' | 'blocked' | 'unverified') => {
     if (!selected) return;
@@ -70,12 +82,12 @@ export function WorkbenchPage({ instances, loaded, intent, visible, toolbarTarge
   };
   const home = () => {
     if (!selected || !grant) return;
-    remembered.current.set(key,base);
+    remembered.current.set(key, base);
     setFrames(value => refreshFrame(touchFrame(value, grant, base), grant));
     navigate({ view: 'workbench', instanceId: selected.id });
   };
 
-  return <section className="workbench-page" hidden={!visible} aria-label="实例工作台">
+  return <section className="workbench-page" id="workbench-panel" role="tabpanel" hidden={!visible} aria-label="实例工作台">
     {visible && selected && toolbarTarget && createPortal(<div className="workbench-controls">
       <button className={`icon-button embed-status ${selected.embedStatus === 'verified' ? 'verified' : selected.embedStatus === 'blocked' ? 'blocked' : ''}`} aria-label={`${selected.alias}：${embedLabels[selected.embedStatus]}，查看来源与嵌入详情`} title={`${selected.alias} · ${embedLabels[selected.embedStatus]}`} onClick={() => setShowDetails(true)}><span className="status-dot" /></button>
       <button className="icon-button" aria-label={`刷新 ${selected.alias} 原站`} title="刷新原站" disabled={!urlValid || !grant} onClick={() => { if (grant) setFrames(value => refreshFrame(value, grant)); }}><Icon name="refresh" size={17} /></button>

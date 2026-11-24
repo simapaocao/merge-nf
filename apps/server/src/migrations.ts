@@ -31,6 +31,32 @@ CREATE INDEX project_activity ON session_summaries(instanceId, projectId, activi
 CREATE INDEX status_activity ON session_summaries(status, activityAt DESC, instanceId, id);
 CREATE INDEX snapshot_counts ON session_summaries(instanceId,generation,status);
 CREATE TABLE audit_events(id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, event TEXT NOT NULL, instanceId TEXT, code TEXT) STRICT;
+`, String.raw`
+-- Opt-in activity side channel. It stores only closed booleans, a bounded work count, the canonical
+-- hash and the center's own receive time; no title, message, event, substatus or request id is kept.
+-- Validity is derived at read time (active generation + baseHash == instances.snapshotHash + receivedAt
+-- within the fresh window), so a revoke, a new generation or a new base snapshot retires it automatically.
+CREATE TABLE activity_snapshots(
+  instanceId TEXT PRIMARY KEY REFERENCES instances(id) ON DELETE CASCADE,
+  generation INTEGER NOT NULL, runId INTEGER NOT NULL,
+  baseHash TEXT NOT NULL, hash TEXT, receivedAt INTEGER NOT NULL,
+  available INTEGER NOT NULL CHECK(available IN (0,1)),
+  CHECK((available=1 AND hash IS NOT NULL) OR (available=0 AND hash IS NULL))
+) STRICT;
+CREATE TABLE activity_items(
+  instanceId TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE, id TEXT NOT NULL, generation INTEGER NOT NULL,
+  reply INTEGER NOT NULL CHECK(reply IN (0,1)), approval INTEGER NOT NULL CHECK(approval IN (0,1)),
+  error INTEGER NOT NULL CHECK(error IN (0,1)), unread INTEGER NOT NULL CHECK(unread IN (0,1)),
+  backgroundWorkCount INTEGER NOT NULL CHECK(backgroundWorkCount>=0),
+  PRIMARY KEY(instanceId,id)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX activity_items_generation ON activity_items(instanceId,generation);
+CREATE TRIGGER retire_activity_base AFTER UPDATE OF authState,generation,snapshotHash ON instances
+WHEN NEW.authState<>'active' OR NEW.generation<>OLD.generation OR NEW.snapshotHash IS NOT OLD.snapshotHash
+BEGIN
+  DELETE FROM activity_items WHERE instanceId=NEW.id;
+  DELETE FROM activity_snapshots WHERE instanceId=NEW.id;
+END;
 `];
 export const SCHEMA_VERSION = migrations.length;
 export function migrate(db: Database) {

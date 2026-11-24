@@ -4,6 +4,7 @@ import { authSchema, routes, type Auth, type ChangesWithInstances } from '@nf-hu
 import { api, type ApiClient } from '../lib/api';
 import { ApiError } from '../lib/errors';
 import { parseIntent, reloadDocument } from '../lib/navigation';
+import { clearTabs, tabsServerEpoch } from '../lib/tabs';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 15_000, retry: false, refetchOnWindowFocus: false }, mutations: { retry: false } } });
 type EventMessage = { kind: 'logout' } | { kind: 'instance-reset'; instanceId: string };
@@ -19,6 +20,8 @@ export function replacePrivateView(client:QueryClient, transport:ApiClient, sess
 }
 type State = {
   view:ReadView; installView:(session:number,snapshot:ChangesWithInstances|null)=>boolean;
+  /** Stable database epoch, preserved across read fences and transient failures. */
+  serverEpoch:string|null;
   auth: Auth | null; ready: boolean; initialError: unknown; revision: number; removedInstance: { id: string; revision: number } | null;
   signIn: (username: string, password: string) => Promise<void>; signOut: () => Promise<void>;
   refreshAuth: () => void; resetInstance: (instanceId: string) => void;
@@ -36,8 +39,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const hardRevision=useRef(0);
   const [view,setView]=useState<ReadView>({epoch:api.readEpoch,verified:false});
+  const [serverEpoch,setServerEpoch]=useState<string|null>(null);
   const installView=useCallback((session:number,snapshot:ChangesWithInstances|null)=>{
     if (hardRevision.current!==session) return false;
+    if(snapshot) setServerEpoch(previous=>tabsServerEpoch(snapshot.version) ?? previous);
     setView(replacePrivateView(queryClient,api,session,snapshot)); return true;
   },[]);
   const clearData = useCallback(() => {
@@ -46,6 +51,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, []);
   const clearAuth = useCallback(() => {
     authAttempt.current++;
+    // Synchronous for logout, 401 and the cross-window logout broadcast; storage denial is harmless.
+    try { clearTabs(window.sessionStorage); } catch { /* sessionStorage may be disabled. */ }
+    setServerEpoch(null);
     api.reset(); api.setAuth(null);
     setAuth(null);
     setReady(true);
@@ -97,7 +105,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     channel.current?.postMessage({ kind: 'logout' } satisfies EventMessage);
     clearAuth();
   }, [clearAuth]);
-  return <AppState.Provider value={{ view, installView, auth, ready, initialError, revision, removedInstance, signIn, signOut, refreshAuth, resetInstance }}>
+  return <AppState.Provider value={{ view, serverEpoch, installView, auth, ready, initialError, revision, removedInstance, signIn, signOut, refreshAuth, resetInstance }}>
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   </AppState.Provider>;
 }

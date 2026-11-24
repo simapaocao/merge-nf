@@ -3,11 +3,15 @@ import type { Instance } from '@nf-hub/protocol';
 import { AppearanceMenu } from './components/AppearanceMenu';
 import { ErrorBanner, HeaderMenu } from './components/Common';
 import { Icon } from './components/Icon';
+import { InstanceTabBar } from './components/InstanceTabs';
 import { useAppearance } from './hooks/useAppearance';
 import { useAppState } from './hooks/useAppState';
-import { useChanges, useInstances } from './hooks/useData';
+import { useChanges, useInstanceActivity, useInstances } from './hooks/useData';
+import { useTabActivity } from './hooks/useTabActivity';
 import { connectionLabel, countLabel, sortedInstances } from './lib/format';
 import { intentHash, navigate, parseIntent, type View } from './lib/navigation';
+import { nextActiveOnClose } from './lib/tabs';
+import { forgetStoredTabs, useInstanceTabs } from './lib/useInstanceTabs';
 import { ConnectionsPage } from './pages/ConnectionsPage';
 import { LoginPage } from './pages/LoginPage';
 import { SessionsPage } from './pages/SessionsPage';
@@ -25,18 +29,19 @@ export function PageNavigation({ view, onChange }: { view: View; onChange: (view
 }
 
 export function Sidebar({ instances, selectedId, view, open, mobile, panelRef, close, count }: { instances: Instance[]; selectedId?: string; view: View; open: boolean; mobile: boolean; panelRef?: RefObject<HTMLElement | null>; close: () => void; count: string }) {
+  // Choosing an instance always means "open this NF in the workbench", never a silent filter change.
   const choose = (target: View, instanceId?: string) => { navigate({ view: target, instanceId }); if (mobile) close(); };
   return <aside id="instance-sidebar" ref={panelRef} className="sidebar" hidden={!open} aria-label="实例列表" role={mobile ? 'dialog' : undefined} aria-modal={mobile ? true : undefined} tabIndex={-1}>
     <div className="sidebar-heading"><span>工作空间 <b>{count}</b></span>{mobile && <button className="icon-button" aria-label="关闭实例列表" onClick={close}><Icon name="close" size={17} /></button>}</div>
     <button className={`sidebar-all ${view === 'sessions' && !selectedId ? 'selected' : ''}`} onClick={() => choose('sessions')}><Icon name="grid" size={17} /><span>全部实例</span></button>
     <div className="sidebar-section-label">我的实例</div>
-    <div className="sidebar-instances">{instances.map(item => <button key={item.id} className={`sidebar-instance ${item.id === selectedId ? 'selected' : ''}`} onClick={() => choose(view === 'sessions' ? 'sessions' : 'workbench', item.id)} title={`${item.alias} · ${item.group || '未分组'} · ${connectionLabel(item)}`}><span className="sidebar-avatar" style={{ color: item.color, backgroundColor: `${item.color}16` }}>{item.alias.slice(0, 1)}</span><span className="sidebar-instance-copy"><strong>{item.alias}</strong><small>{item.group || connectionLabel(item)}</small></span><span className={`tiny-dot ${item.connection === 'connected' && item.freshness === 'fresh' ? 'online' : ''}`} />{item.favorite && <span className="sr-only">已收藏</span>}</button>)}</div>
+    <div className="sidebar-instances">{instances.map(item => <button key={item.id} className={`sidebar-instance ${item.id === selectedId ? 'selected' : ''}`} onClick={() => choose('workbench', item.id)} title={`${item.alias} · ${item.group || '未分组'} · ${connectionLabel(item)}`}><span className="sidebar-avatar" style={{ color: item.color, backgroundColor: `${item.color}16` }}>{item.alias.slice(0, 1)}</span><span className="sidebar-instance-copy"><strong>{item.alias}</strong><small>{item.group || connectionLabel(item)}</small></span><span className={`tiny-dot ${item.connection === 'connected' && item.freshness === 'fresh' ? 'online' : ''}`} />{item.favorite && <span className="sr-only">已收藏</span>}</button>)}</div>
     <button className="sidebar-add" onClick={() => choose('connections')}><Icon name="plus" size={16} />管理实例连接</button>
   </aside>;
 }
 
 function Dashboard() {
-  const { auth, signOut, revision } = useAppState();
+  const { auth, signOut, revision, serverEpoch } = useAppState();
   const { sidebar, setPreferences } = useAppearance();
   const [intent, setIntent] = useState(() => parseIntent(window.location.hash));
   const [logoutError, setLogoutError] = useState<unknown>(null);
@@ -44,15 +49,28 @@ function Dashboard() {
   const [workbenchSlot, setWorkbenchSlot] = useState<HTMLDivElement | null>(null);
   const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 720px)').matches);
   const [drawer, setDrawer] = useState(false);
+  const [tabsCollapsed, setTabsCollapsed] = useState(false);
+  const [mountedIds, setMountedIds] = useState<readonly string[]>([]);
   const sidebarButton = useRef<HTMLButtonElement>(null);
   const sidebarPanel = useRef<HTMLElement>(null);
   const instancesQuery = useInstances();
   const instances = useMemo(() => sortedInstances(instancesQuery.data?.items ?? []), [instancesQuery.data]);
+  const activityQuery = useInstanceActivity();
   const changesError = useChanges();
+  // isSuccess alone is not proof of a verified snapshot: a fenced read leaves data undefined.
+  const verified = instancesQuery.isSuccess && !!instancesQuery.data;
+  const validIds = useMemo(() => (verified ? new Set(instances.map(item => item.id)) : null), [verified, instances]);
+  const tabs = useInstanceTabs({ username: auth?.username ?? null, serverEpoch, validIds });
+  // Keep only logical ids across unverified reads; no old private labels or counts are rendered.
+  const activity = useTabActivity(instances, verified ? activityQuery.data?.items : undefined, verified);
   const open = mobile ? drawer : sidebar;
   const closeDrawer = useCallback(() => setDrawer(false), []);
+  const selectedId = intent.view === 'workbench' ? intent.instanceId ?? null : null;
+  // Mounted frames are only meaningful for a verified list; otherwise "asleep" would be a guess.
+  const mountedSet = useMemo(() => (verified ? new Set(mountedIds) : null), [verified, mountedIds]);
   useEffect(() => { const change = () => setIntent(parseIntent(window.location.hash)); window.addEventListener('hashchange', change); return () => window.removeEventListener('hashchange', change); }, []);
-  useEffect(() => { if (instancesQuery.isSuccess && !instances.length && !window.location.hash) navigate({ view: 'connections' }); }, [instances.length, instancesQuery.isSuccess]);
+  // Only an authoritative empty list may redirect; an unverified read is not "no instances".
+  useEffect(() => { if (verified && !instances.length && !window.location.hash) navigate({ view: 'connections' }); }, [verified, instances.length]);
   useEffect(() => {
     const query = window.matchMedia('(max-width: 720px)');
     const change = () => { setMobile(query.matches); setDrawer(false); };
@@ -60,6 +78,20 @@ function Dashboard() {
     return () => query.removeEventListener('change', change);
   }, []);
   useEffect(() => { setDrawer(false); }, [intent.view, intent.instanceId]);
+  // An opened tab and the workbench view stay in sync in both directions. Waiting for
+  // hydration keeps a restored list from being replaced by the single hash target.
+  useEffect(() => {
+    if (!tabs.hydrated || intent.view !== 'workbench' || !intent.instanceId) return;
+    if (validIds && !validIds.has(intent.instanceId)) { navigate({ view: 'sessions' }); return; }
+    tabs.open(intent.instanceId);
+  }, [tabs.hydrated, intent.view, intent.instanceId, tabs.open, validIds]);
+  // A refresh inside the workbench without an instance re-selects the restored tab only.
+  // Restoring never hijacks a deliberate visit to the global session page.
+  useEffect(() => {
+    if (!tabs.hydrated || intent.view !== 'workbench' || intent.instanceId) return;
+    const restored = tabs.state.activeId;
+    if (restored) navigate({ view: 'workbench', instanceId: restored });
+  }, [tabs.hydrated, intent.view, intent.instanceId, tabs.state.activeId]);
   useEffect(() => {
     if (!mobile || !drawer) return;
     const panel = sidebarPanel.current;
@@ -87,15 +119,34 @@ function Dashboard() {
     setLogoutError(null); setSigningOut(true);
     try { await signOut(); } catch (error) { setLogoutError(error); setSigningOut(false); }
   };
-  const updateView = (view: View) => navigate({ view, instanceId: view === 'workbench' && intent.view === 'workbench' ? intent.instanceId : undefined });
-  const active = instances.find(item => item.id === intent.instanceId);
+  // Switching to the workbench reuses the active tab before falling back to the hash instance.
+  const updateView = (view: View) => {
+    const instanceId = view !== 'workbench' ? undefined
+      : intent.view === 'workbench' && intent.instanceId ? intent.instanceId
+        : tabs.state.activeId ?? undefined;
+    navigate({ view, instanceId });
+  };
+  const activateTab = (instanceId: string) => { tabs.activate(instanceId); navigate({ view: 'workbench', instanceId }); };
+  // A tab close only changes the current page when that tab was the one on screen.
+  const closeTab = (instanceId: string) => {
+    const wasActive = tabs.state.activeId === instanceId;
+    const next = nextActiveOnClose(tabs.state, instanceId);
+    tabs.close(instanceId);
+    if (wasActive && intent.view === 'workbench') navigate(next ? { view: 'workbench', instanceId: next } : { view: 'sessions' });
+  };
+  // Closing every tab returns to the global session page only when the workbench was showing;
+  // the connection manager keeps its own view.
+  const closeAllTabs = () => {
+    tabs.closeAll();
+    if (intent.view === 'workbench') navigate({ view: 'sessions' });
+  };
 
   return <div className="app-shell"><a href="#main-content" className="skip-link" onClick={event => { event.preventDefault(); document.getElementById('main-content')?.focus(); }}>跳转到主内容</a>
     <header className="app-header">
       <button ref={sidebarButton} className="icon-button sidebar-toggle" aria-label={open ? '收起实例列表' : '展开实例列表'} title={open ? '收起实例列表' : '展开实例列表'} aria-expanded={open} aria-controls="instance-sidebar" onClick={() => { if (mobile) setDrawer(value => !value); else setPreferences({ sidebar: !sidebar }); }}><Icon name="sidebar" size={18} /></button>
       <a href={intentHash({ view: 'sessions' })} className="brand" title="多 NF 工作台"><span className="brand-mark">NF</span><span className="brand-copy">多 NF 工作台</span></a>
       <PageNavigation view={intent.view} onChange={updateView} />
-      <label className="site-selector" title={active ? `${active.alias} · ${active.browserBaseUrl}` : '选择 NF 实例'}><span className="sr-only">当前 NF</span><select aria-label="当前 NF" value={active?.id ?? ''} onChange={event => { if (event.target.value) navigate({ view: intent.view === 'sessions' ? 'sessions' : 'workbench', instanceId: event.target.value }); }}><option value="" disabled>选择 NF</option>{instances.map(item => <option key={item.id} value={item.id}>{item.alias}</option>)}</select><Icon name="chevron" size={13} /></label>
+      <InstanceTabBar state={tabs.state} instances={instances} selectedId={selectedId} mountedIds={mountedSet} activityFor={activity.activityFor} lastSuccessFor={activity.lastSuccessFor} onActivate={activateTab} onClose={closeTab} onCloseAll={closeAllTabs} collapsed={tabsCollapsed} onToggleCollapsed={() => setTabsCollapsed(value => !value)} />
       <div className="header-workbench-slot" ref={setWorkbenchSlot} hidden={intent.view !== 'workbench'} />
       <div className="header-end"><AppearanceMenu /><HeaderMenu label="账户菜单" icon={<Icon name="user" size={17} />} className="account-menu"><div className="menu-heading">{auth?.username}</div><button className="menu-item" data-close-menu disabled={signingOut} onClick={() => { void logout(); }}><Icon name="logout" size={17} />{signingOut ? '正在退出…' : '退出登录'}</button></HeaderMenu></div>
     </header>
@@ -106,13 +157,15 @@ function Dashboard() {
         <div className="global-notices"><ErrorBanner error={instancesQuery.error} retry={() => { void instancesQuery.refetch(); }} /><ErrorBanner error={changesError} /><ErrorBanner error={logoutError} /></div>
         {intent.view === 'sessions' && <SessionsPage key={revision} instances={instances} instanceId={intent.instanceId} />}
         {intent.view === 'connections' && <ConnectionsPage instances={instances} loading={instancesQuery.isPending} unavailable={instancesQuery.isError && !instancesQuery.data} />}
-        <WorkbenchPage instances={instances} loaded={instancesQuery.isSuccess} intent={intent} visible={intent.view === 'workbench'} toolbarTarget={workbenchSlot} />
+        <WorkbenchPage key={serverEpoch ?? 'pending'} instances={instances} loaded={verified && tabs.hydrated} intent={intent} visible={intent.view === 'workbench'} toolbarTarget={workbenchSlot} openIds={tabs.state.openIds} onMountedChange={setMountedIds} />
       </main>
     </div>
   </div>;
 }
 export function App() {
   const { auth, ready } = useAppState();
-  if (!ready) return <main className="initial-loading"><div className="standalone-appearance"><AppearanceMenu /></div><span className="brand-mark">NF</span><p role="status">正在验证工作台登录状态…</p></main>;
+  // Signing out or losing the session also drops every account's restored tab list.
+  useEffect(() => { if (ready && !auth) forgetStoredTabs(); }, [ready, auth]);
+  if (!ready) return <main className="initial-loading"><div className="standalone-appearance"><AppearanceMenu /></div><span className="brand-mark">NF</span><p role="status">验证登录中…</p></main>;
   return auth ? <Dashboard /> : <LoginPage />;
 }

@@ -1,8 +1,11 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { LIMITS } from '@nf-hub/protocol';
+import { LIMITS, activityHash } from '@nf-hub/protocol';
+import { receiveActivity } from '../src/activity';
+import { HubDatabase } from '../src/connection';
+import { SCHEMA_VERSION } from '../src/migrations';
 import { digest, initializeAdmin, login, secret } from '../src/auth';
 import { transferConfig } from '../src/backup';
 import { openDatabase, readyToServe } from '../src/db';
@@ -34,6 +37,59 @@ test('重开活动库保留轮号；专用备份不可监听；恢复为全新�
         expect(await login(recovered,'owner',pw,()=>BASE)).toHaveProperty('auth');
       } finally {recovered.close();}
     } finally {db.close();}
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});
+test('schema1专用备份只读恢复到schema2；配置保留，所有凭证/摘要/活动表均空且源字节不变',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'nf-hub-legacy-backup-'));
+  try {
+    const live=join(dir,'live.sqlite'),legacy=join(dir,'schema1-backup.sqlite'),restored=join(dir,'restored.sqlite');
+    const source=openDatabase(live);let id='';
+    try {
+      await initializeAdmin(source,'owner',secret(32),BASE);
+      const a=makeActor(source,'configured',BASE);id=a.id;await publish(source,a,[summary('safe-id')],BASE);
+      const base=instanceRecord(source,a.id),items=[{id:'safe-id',reply:true,approval:false,error:false,unread:false,backgroundWorkCount:1}];
+      await receiveActivity(source,a.hash,{protocolVersion:1,generation:a.generation,runId:base.runSeq,baseHash:base.snapshotHash,available:true,count:1,hash:await activityHash(items),items},()=>BASE);
+    } finally {source.close();}
+    transferConfig('backup',live,legacy);
+    // Test-only construction of the exact old schema: remove only migration-2 additions before taking
+    // the immutable source fingerprint. restore itself never runs migrations on this source file.
+    const old=new HubDatabase(legacy,{strict:true});
+    try {old.exec('DROP TRIGGER retire_activity_base; DROP TABLE activity_items; DROP TABLE activity_snapshots; PRAGMA user_version=1;');} finally {old.close();}
+    const bytes=readFileSync(legacy),modified=statSync(legacy).mtimeMs;
+    transferConfig('restore',legacy,restored);
+    expect(readFileSync(legacy).equals(bytes)).toBe(true);expect(statSync(legacy).mtimeMs).toBe(modified);
+    expect(existsSync(legacy+'-wal')).toBe(false);expect(existsSync(legacy+'-shm')).toBe(false);
+    const recovered=openDatabase(restored);
+    try {
+      expect(recovered.query<{user_version:number},[]>('PRAGMA user_version').get()?.user_version).toBe(SCHEMA_VERSION);
+      readyToServe(recovered);
+      expect(instanceRecord(recovered,id)).toMatchObject({alias:'configured',authState:'revoked',sessionCount:null,lastSuccessAt:null,snapshotHash:null,scopeJson:null});
+      for(const table of ['admin_sessions','connector_credentials','pairings','sync_runs','session_summaries','activity_snapshots','activity_items']){
+        expect(recovered.query(`SELECT count(*) AS n FROM ${table}`).get()).toEqual({n:0});
+      }
+    } finally {recovered.close();}
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});
+test('恢复拒绝未知schema0/未来版本与live伪备份，所有被拒源只读且不产生目标文件',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'nf-hub-backup-versions-'));
+  try {
+    const live=join(dir,'live.sqlite'),backup=join(dir,'backup.sqlite');
+    const source=openDatabase(live);
+    try {await initializeAdmin(source,'owner',secret(32),BASE);} finally {source.close();}
+    transferConfig('backup',live,backup);
+    for(const version of [0,SCHEMA_VERSION+1,99]){
+      const rejected=join(dir,`v${version}.sqlite`),target=join(dir,`restored-v${version}.sqlite`);
+      copyFileSync(backup,rejected);
+      const fixture=new HubDatabase(rejected,{strict:true});
+      try {fixture.exec(`PRAGMA user_version=${version}`);} finally {fixture.close();}
+      const bytes=readFileSync(rejected),modified=statSync(rejected).mtimeMs;
+      expect(()=>transferConfig('restore',rejected,target)).toThrow('Wrong input database type/version');
+      expect(readFileSync(rejected).equals(bytes)).toBe(true);expect(statSync(rejected).mtimeMs).toBe(modified);
+      expect(existsSync(target)).toBe(false);
+    }
+    const bytes=readFileSync(live),target=join(dir,'live-cannot-restore.sqlite');
+    expect(()=>transferConfig('restore',live,target)).toThrow('Wrong input database type/version');
+    expect(readFileSync(live).equals(bytes)).toBe(true);expect(existsSync(target)).toBe(false);
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
 test('保留语句引用超过 Bun 默认20及中心缓存128时，严格关库仍立即释放资源',()=>{

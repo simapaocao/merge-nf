@@ -16,7 +16,7 @@ from html.parser import HTMLParser
 import zipfile
 
 VERSION = "0.1.0"
-PLUGIN_VERSION = "0.1.2"
+PLUGIN_VERSION = "0.1.3"
 NAME = f"nf-workbench-{VERSION}"
 ROOT = Path(__file__).absolute().parent.parent
 MAX_MEMBERS = 192
@@ -33,13 +33,13 @@ TEXT_GROUPS = {
     ),
     "apps/server": ("package.json",),
     "apps/server/src": (
-        "app.ts", "auth.ts", "backup.ts", "cli.ts", "config.ts", "connection.ts",
+        "activity.ts", "app.ts", "auth.ts", "backup.ts", "cli.ts", "config.ts", "connection.ts",
         "connector-routes.ts", "dashboard.ts", "db.ts", "errors.ts", "http-types.ts",
         "instances.ts", "limits.ts", "main.ts", "migrations.ts", "pairing.ts",
         "static.ts", "sync.ts", "web-routes.ts",
     ),
     "apps/server/test": (
-        "auth-http.test.ts", "dashboard.test.ts", "fixture.ts", "instances.test.ts",
+        "activity.test.ts", "auth-http.test.ts", "dashboard.test.ts", "fixture.ts", "groups.test.ts", "instances.test.ts",
         "limits.test.ts", "recovery.test.ts", "static.test.ts", "sync.test.ts",
     ),
     "apps/web": ("package.json", "index.html", "tsconfig.json", "vite.config.ts"),
@@ -47,32 +47,33 @@ TEXT_GROUPS = {
     "apps/web/src": ("App.tsx", "main.tsx", "styles.css"),
     "apps/web/src/components": (
         "AppearanceMenu.tsx", "Common.tsx", "ConnectionPathGuide.tsx", "HttpAccessGuide.tsx",
-        "Icon.tsx", "InstanceEditor.tsx", "OverviewCards.tsx", "PairingDialog.tsx",
-        "httpFrontAddress.ts",
+        "Icon.tsx", "InstanceEditor.tsx", "InstanceTabs.tsx", "OverviewCards.tsx", "PairingDialog.tsx",
+        "SessionCards.css", "SessionCards.tsx", "httpFrontAddress.ts",
     ),
-    "apps/web/src/hooks": ("useAppearance.ts", "useAppState.tsx", "useData.ts"),
+    "apps/web/src/hooks": ("useAppearance.ts", "useAppState.tsx", "useData.ts", "useTabActivity.ts"),
     "apps/web/src/lib": (
         "api.ts", "errors.ts", "format.ts", "frames.ts", "httpAccessTemplates.ts", "navigation.ts",
+        "tabActivity.ts", "tabs.ts", "useInstanceTabs.ts",
     ),
     "apps/web/src/pages": (
         "ConnectionsPage.tsx", "LoginPage.tsx", "SessionsPage.tsx", "WorkbenchPage.tsx",
     ),
     "apps/web/test": (
         "appearance.test.tsx", "components.test.tsx", "format.test.ts", "http-access.test.tsx",
-        "navigation.test.ts", "security-state.test.ts",
+        "instance-tabs.test.tsx", "navigation.test.ts", "security-state.test.ts", "session-cards.test.tsx",
     ),
     "packages/protocol": ("package.json",),
-    "packages/protocol/src": ("connector.ts", "constants.ts", "index.ts", "summary.ts", "url.ts", "web.ts"),
+    "packages/protocol/src": ("activity.ts", "connector.ts", "constants.ts", "index.ts", "summary.ts", "url.ts", "web.ts"),
     "packages/protocol/test": ("contract.test.ts", "url.test.ts"),
     "packages/nf-connector": ("package.json", "manifest.json", "tsconfig.json"),
     "packages/nf-connector/src": (
-        "center-trust.ts", "collection.ts", "config.ts", "constants.ts", "controller.ts",
+        "activity.ts", "center-trust.ts", "collection.ts", "config.ts", "constants.ts", "controller.ts",
         "errors.ts", "host-rpc.ts", "index.ts", "pem.ts", "runtime.ts", "transport.ts",
     ),
     "packages/nf-connector/ui": ("panel.ts",),
     "packages/nf-connector/scripts": ("build.ts", "check-host-manifest.ts", "package.ts"),
     "packages/nf-connector/test": (
-        "activation-read.test.ts", "center-trust.test.ts", "collection.test.ts", "controller.test.ts",
+        "activation-read.test.ts", "activity-controller.test.ts", "activity.test.ts", "center-trust.test.ts", "collection.test.ts", "controller.test.ts",
         "ephemeral-pki.ts", "fixtures.ts", "host-transport.test.ts",
     ),
     "deploy": (
@@ -314,7 +315,7 @@ def publish(outputs: dict[str, bytes]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Package the explicit source allowlist, existing web dist and connector 0.1.2; never install or rebuild.",
+        description=f"Package the explicit source allowlist, existing web dist and connector {PLUGIN_VERSION}; never install or rebuild.",
         epilog="Output: artifacts/nf-workbench-0.1.0.zip, .zip.sha256 and .manifest.json. This is NOT a dependency-free executable: use Bun 1.3.14, bun install --frozen-lockfile, then admin init/start.",
     )
     parser.add_argument("--list", action="store_true", help="Validate inputs and list paths/hashes without creating any outputs")

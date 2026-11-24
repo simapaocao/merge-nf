@@ -1,4 +1,5 @@
-import { LIMITS, failedRequestSchema, routes, runRequestSchema } from '@nf-hub/protocol';
+import { ACTIVITY_SNAPSHOT_ROUTE, LIMITS, failedRequestSchema, routes, runRequestSchema } from '@nf-hub/protocol';
+import { receiveActivity } from './activity';
 import { fail, validated } from './errors';
 import type { Router, Services } from './http-types';
 import { readJson } from './limits';
@@ -29,6 +30,10 @@ export function connectorRoutes(app: Router, {db,clock,admission}: Services) {
     const id = runNumber(c.req.param('id'));
     admission.rate(`packets:${c.get('instanceId')}`,16,60_000);
     return admission.withSlot('snapshot',2,async () => c.json(await acceptSnapshot(db,c.get('tokenHash'),id,await readJson(c.req.raw,LIMITS.snapshotBytes),clock)));
+  });
+  app.post(ACTIVITY_SNAPSHOT_ROUTE, async c => {
+    admission.rate(`activity:${c.get('instanceId')}`,16,60_000);
+    return admission.withSlot('activity',2,async () => c.json(await receiveActivity(db,c.get('tokenHash'),await readJson(c.req.raw,LIMITS.snapshotBytes),clock)));
   });
   app.post(`${routes.runs}/:id/failed`, async c => {
     const id = runNumber(c.req.param('id')), data = validated(failedRequestSchema,await readJson(c.req.raw,2048));

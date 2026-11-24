@@ -3,3 +3,4 @@ export * from './summary';
 export * from './connector';
 export * from './web';
 export * from './url';
+export * from './activity';
