@@ -135,7 +135,7 @@ export function InstanceTabBar({ state, instances, selectedId, mountedIds, activ
     <div className="menu-divider" /><button className="menu-item" data-close-menu onClick={onCloseAll}><Icon name="close" size={16} />关闭全部标签</button>
   </HeaderMenu>;
 
-  return <section className={`instance-tabs ${collapsed ? 'collapsed' : ''}`} aria-label="已打开的实例标签">
+  return <section className={`instance-tabs${collapsed ? ' collapsed' : ''}${count === 0 ? ' tabs-empty-state' : ''}`} aria-label="已打开的实例标签">
     <button ref={toggle} className="icon-button tabs-toggle" aria-expanded={!collapsed} aria-controls="instance-tablist" aria-label={collapsed ? '展开实例标签栏' : '收起实例标签栏'} title={collapsed ? '展开实例标签栏' : '收起实例标签栏'} onClick={onToggleCollapsed}><Icon name="chevron" size={13} /></button>
     {collapsed
       ? <div className="tabs-collapsed"><span className="tabs-collapsed-text">{summary}</span>{menu}</div>

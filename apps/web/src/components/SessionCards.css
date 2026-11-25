@@ -1,7 +1,7 @@
 .session-groups{display:flex;flex-direction:column;gap:26px;padding:20px 23px 24px}
 .session-focus-empty{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;padding:28px 15px;font-size:12px;color:var(--muted)}
 .panel-heading-tools{display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:flex-end}
-@media(max-width:720px){.panel-heading-tools{width:100%;justify-content:space-between}}
+@media(max-width:720px){.panel-heading-tools{width:100%;gap:8px;justify-content:flex-start}}
 .session-group-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:14px}
 .session-group-heading h3{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--text)}
 .session-group-heading .text-button{flex-shrink:0;font-size:11px}
@@ -40,4 +40,4 @@
 .group-filter-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:11px 23px;background:var(--accent-surface);border-bottom:1px solid var(--line);font-size:11px;color:var(--muted)}
 .group-filter-bar strong{font-weight:600;color:var(--teal)}
 @media(max-width:1200px){.session-card-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:720px){.session-groups{padding:16px 15px 20px;gap:22px}.session-card-grid{grid-template-columns:1fr;gap:11px}.session-group-heading{flex-direction:column;gap:9px}.session-group-heading .text-button{align-self:flex-start}.session-card-link{padding:13px 14px 12px}.group-filter-bar{padding:10px 15px}}
+@media(max-width:720px){.session-groups{padding:12px 12px 16px;gap:18px}.session-card-grid{grid-template-columns:1fr;gap:10px}.session-group-heading{flex-direction:row;align-items:center;gap:8px;margin-bottom:10px}.session-group-heading h3{font-size:14px}.session-group-heading .text-button{align-self:center;min-height:34px;padding:6px 8px;font-size:13px}.session-card:active{border-color:var(--line-strong);background:var(--hover)}.session-card-link{padding:12px 13px;gap:7px}.session-card-head .instance-inline{font-size:12px}.session-kind-badge{font-size:11px;padding:2px 7px}.session-parent-label{font-size:11px}.session-card-title{font-size:14px;line-height:1.45}.session-card-meta .project-cell{font-size:12px}.session-card-meta .pill{font-size:11px;padding:3px 8px;min-height:24px}.session-card-reason{font-size:11px;padding:2px 8px}.session-card-foot{font-size:11px;padding-top:6px}.session-view-toggle{padding:3px;border-radius:7px}.session-view-toggle button{min-height:30px;padding:4px 10px;font-size:12px;border-radius:5px}.group-filter-bar{padding:10px 12px;font-size:12px}.group-filter-bar .text-button{min-height:32px;padding:4px 6px;font-size:12px}.session-focus-empty{padding:24px 12px;font-size:13px}}

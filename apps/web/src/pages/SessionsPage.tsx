@@ -79,6 +79,7 @@ export function SessionsPage({ instances, instanceId = '' }: { instances: Instan
   const [search, setSearch] = useState('');
   const [projectSearch, setProjectSearch] = useState('');
   const [mode, setMode] = useState<SessionViewMode>(() => readSessionViewMode());
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const queryClient = useQueryClient();
   // 只刷新会话相关私有读取，不动由同一读事务种入的实例快照。
   const refreshSessions = () => { void queryClient.invalidateQueries({ predicate: query => query.queryKey[0] === 'private' && (query.queryKey[2] === 'sessions' || query.queryKey[2] === 'sessionGroups') }); };
@@ -90,7 +91,8 @@ export function SessionsPage({ instances, instanceId = '' }: { instances: Instan
   const update = (patch: Partial<SessionFilters>) => setFilters(value => applyFilterPatch(value, patch));
   const group = groupOf(filters);
   const view = resolveSessionView(mode, group);
-  const hasFilters = !!(filters.q || filters.instanceId || filters.status || filters.projectId || filters.standalone || filters.includeArchived || group);
+  const activeFilterCount = [filters.instanceId, filters.status, filters.projectId, filters.standalone, filters.includeArchived].filter(Boolean).length;
+  const hasFilters = !!(filters.q || activeFilterCount || group);
   const chooseMode = (next: SessionViewMode) => {
     setMode(next); saveSessionViewMode(next);
     if (next === 'cards' && group) setFilters(value => ({ ...value, ...clearGroupPatch() }));
@@ -98,16 +100,17 @@ export function SessionsPage({ instances, instanceId = '' }: { instances: Instan
 
   return <div className="page sessions-page"><div className="page-heading"><h1>全局会话</h1><button className="button secondary" onClick={refreshSessions}><Icon name="refresh" />刷新列表</button></div>
     <OverviewCards />
-    <section className="panel sessions-panel"><div className="panel-heading"><div><h2>{filters.focus ? '需关注会话' : '已同步会话'}{group ? <span className="count-badge">{sessionGroupLabel(group, filters.focus).title}</span> : null}</h2></div><div className="panel-heading-tools"><SessionFocusToggle focus={filters.focus === true} onChange={focus => setFilters(value => ({ ...value, ...focusModePatch(focus) }))} /><div className="search-field"><Icon name="search" /><input aria-label="搜索会话标题" placeholder="搜索会话标题…" value={search} onChange={event => setSearch(event.target.value)} maxLength={256} /></div>
-      <div className="session-view-toggle" role="group" aria-label="会话展示方式"><button className={view === 'cards' ? 'active' : ''} aria-pressed={view === 'cards'} onClick={() => chooseMode('cards')}>卡片</button><button className={view === 'list' ? 'active' : ''} aria-pressed={view === 'list'} onClick={() => chooseMode('list')}>列表</button></div></div></div>
-      <div className="filters"><label>实例<select value={filters.instanceId} onChange={event => { update({ instanceId: event.target.value, projectId: '' }); navigate({ view: 'sessions', instanceId: event.target.value || undefined }); }}><option value="">全部实例</option>{instances.map(item => <option key={item.id} value={item.id}>{item.alias}</option>)}</select></label>
+    <section className="panel sessions-panel"><div className="panel-heading"><div><h2>{filters.focus ? '需关注会话' : '已同步会话'}{group ? <span className="count-badge">{sessionGroupLabel(group, filters.focus).title}</span> : null}</h2></div><div className="panel-heading-tools"><SessionFocusToggle focus={filters.focus === true} onChange={focus => setFilters(value => ({ ...value, ...focusModePatch(focus) }))} /><div className="search-field"><Icon name="search" /><input aria-label="搜索会话标题" placeholder="搜索会话标题…" value={search} onChange={event => setSearch(event.target.value)} maxLength={256} />{search && <button type="button" className="icon-button search-clear" aria-label="清空搜索" onClick={() => setSearch('')}><Icon name="close" size={14} /></button>}</div>
+      <div className="session-view-toggle" role="group" aria-label="会话展示方式"><button className={view === 'cards' ? 'active' : ''} aria-pressed={view === 'cards'} onClick={() => chooseMode('cards')}>卡片</button><button className={view === 'list' ? 'active' : ''} aria-pressed={view === 'list'} onClick={() => chooseMode('list')}>列表</button></div>
+      <button type="button" className={`button secondary small mobile-filter-toggle${filtersOpen || activeFilterCount > 0 ? ' active' : ''}`} aria-expanded={filtersOpen} aria-controls="session-filters" onClick={() => setFiltersOpen(value => !value)}><Icon name="filter" size={14} /><span>筛选</span>{activeFilterCount > 0 && <span className="filter-count">{activeFilterCount}</span>}</button></div></div>
+      <div id="session-filters" className={`filters${filtersOpen ? '' : ' mobile-collapsed'}`}><label>实例<select value={filters.instanceId} onChange={event => { update({ instanceId: event.target.value, projectId: '' }); navigate({ view: 'sessions', instanceId: event.target.value || undefined }); }}><option value="">全部实例</option>{instances.map(item => <option key={item.id} value={item.id}>{item.alias}</option>)}</select></label>
         <label>会话状态<select value={filters.status} onChange={event => update({ status: event.target.value as SessionFilters['status'], ...(event.target.value === 'archived' ? { includeArchived: true } : {}) })}><option value="">全部状态</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label className="project-filter">项目<select disabled={!filters.instanceId || filters.standalone} value={filters.projectId} onChange={event => update({ projectId: event.target.value })}><option value="">{filters.instanceId ? '全部项目' : '请先选择实例'}</option>{projects.data?.items.map(project => <option key={JSON.stringify([project.instanceId, project.projectId])} value={project.projectId}>{project.projectName || project.projectId}</option>)}</select></label>
         <label className="check-label"><input type="checkbox" checked={filters.standalone} onChange={event => update({ standalone: event.target.checked, projectId: '' })} />仅独立会话</label>
         <label className="check-label"><input type="checkbox" checked={filters.includeArchived} onChange={event => update({ includeArchived: event.target.checked })} />包含归档</label>
         {hasFilters && <button className="text-button filter-reset" onClick={() => { setSearch(''); setProjectSearch(''); setFilters({ ...initialFilters, focus: filters.focus }); navigate({ view: 'sessions' }); }}>清除筛选</button>}
       </div>
-      {filters.instanceId && !filters.standalone && <div className="project-search"><label title={projects.data && projects.data.total > 100 ? '仅显示前100项，请缩小关键词' : undefined}>查找项目<input placeholder="按名称或 ID 查找项目" value={projectSearch} maxLength={256} onChange={event => { setProjectSearch(event.target.value); update({ projectId: '' }); }} /></label><ErrorBanner error={projects.error} retry={() => { void projects.refetch(); }} /></div>}
+      {filters.instanceId && !filters.standalone && <div className={`project-search${filtersOpen ? '' : ' mobile-collapsed'}`}><label title={projects.data && projects.data.total > 100 ? '仅显示前100项，请缩小关键词' : undefined}>查找项目<input placeholder="按名称或 ID 查找项目" value={projectSearch} maxLength={256} onChange={event => { setProjectSearch(event.target.value); update({ projectId: '' }); }} /></label><ErrorBanner error={projects.error} retry={() => { void projects.refetch(); }} /></div>}
       {view === 'cards'
         ? <SessionGroupsView filters={filters} instances={instances} setFilters={setFilters} />
         : <SessionListView filters={filters} instances={instances} setFilters={setFilters} />}

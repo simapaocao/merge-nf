@@ -1,4 +1,4 @@
-type IconName = 'grid' | 'screen' | 'link' | 'search' | 'plus' | 'arrow' | 'external' | 'refresh' | 'home' | 'close' | 'logout' | 'check' | 'copy' | 'chevron' | 'settings' | 'sidebar' | 'menu' | 'more' | 'sun' | 'moon' | 'system' | 'user' | 'info';
+type IconName = 'grid' | 'screen' | 'link' | 'search' | 'plus' | 'arrow' | 'external' | 'refresh' | 'home' | 'close' | 'logout' | 'check' | 'copy' | 'chevron' | 'settings' | 'sidebar' | 'menu' | 'more' | 'sun' | 'moon' | 'system' | 'user' | 'info' | 'filter';
 const paths: Record<IconName, string> = {
   grid: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
   screen: 'M3 4h18v13H3z M8 21h8 M12 17v4',
@@ -17,6 +17,7 @@ const paths: Record<IconName, string> = {
   system: 'M3 4h18v13H3z M8 21h8 M12 17v4 M8 10h8',
   user: 'M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0 M4 21v-2a8 8 0 0 1 16 0v2',
   info: 'M12 11v6 M12 7h.01 M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0',
+  filter: 'M4 5h16l-6 7v6l-4 2v-8z',
 };
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
