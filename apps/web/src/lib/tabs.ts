@@ -12,6 +12,19 @@ export function openTab(state: TabsState, instanceId: string): TabsState {
 export function activateTab(state: TabsState, instanceId: string): TabsState {
   return state.openIds.includes(instanceId) && state.activeId !== instanceId ? { openIds: state.openIds, activeId: instanceId } : state;
 }
+/** Drag-and-drop or keyboard reorder of opened tabs without changing active selection or reloading iframes. */
+export function moveTab(state: TabsState, fromId: string, toId: string, position: 'before' | 'after' = 'before'): TabsState {
+  if (!fromId || !toId || fromId === toId) return state;
+  const from = state.openIds.indexOf(fromId);
+  const to = state.openIds.indexOf(toId);
+  if (from < 0 || to < 0) return state;
+  const openIds = state.openIds.filter(id => id !== fromId);
+  const target = openIds.indexOf(toId);
+  const insertAt = position === 'after' ? target + 1 : target;
+  openIds.splice(insertAt, 0, fromId);
+  if (openIds.every((id, index) => id === state.openIds[index])) return state;
+  return { openIds, activeId: state.activeId };
+}
 /** Closing a view never touches the instance itself. The next active tab is the right neighbour, then the left one. */
 export function closeTab(state: TabsState, instanceId: string): TabsState {
   const index = state.openIds.indexOf(instanceId);

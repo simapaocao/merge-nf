@@ -10,8 +10,16 @@ import { useChanges, useInstanceActivity, useInstances } from './hooks/useData';
 import { useTabActivity } from './hooks/useTabActivity';
 import { connectionLabel, countLabel, sortedInstances } from './lib/format';
 import { intentHash, navigate, parseIntent, type View } from './lib/navigation';
+import {
+  clearSplitLayout, defaultSplitState, focusOrAssignInstance, readSplitLayout, reconcileSplit,
+  setSplitMode, splitStorageKey, writeSplitLayout, type SplitMode, type SplitState,
+} from './lib/splitLayout';
 import { nextActiveOnClose } from './lib/tabs';
 import { forgetStoredTabs, useInstanceTabs } from './lib/useInstanceTabs';
+
+function safeSessionStorage() {
+  try { return typeof window === 'undefined' ? undefined : window.sessionStorage; } catch { return undefined; }
+}
 import { ConnectionsPage } from './pages/ConnectionsPage';
 import { LoginPage } from './pages/LoginPage';
 import { SessionsPage } from './pages/SessionsPage';
@@ -51,6 +59,9 @@ function Dashboard() {
   const [drawer, setDrawer] = useState(false);
   const [tabsCollapsed, setTabsCollapsed] = useState(false);
   const [mountedIds, setMountedIds] = useState<readonly string[]>([]);
+  const [split, setSplit] = useState<SplitState>(defaultSplitState);
+  const [splitHydratedKey, setSplitHydratedKey] = useState<string | null>(null);
+  const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
   const sidebarButton = useRef<HTMLButtonElement>(null);
   const sidebarPanel = useRef<HTMLElement>(null);
   const instancesQuery = useInstances();
@@ -61,11 +72,32 @@ function Dashboard() {
   const verified = instancesQuery.isSuccess && !!instancesQuery.data;
   const validIds = useMemo(() => (verified ? new Set(instances.map(item => item.id)) : null), [verified, instances]);
   const tabs = useInstanceTabs({ username: auth?.username ?? null, serverEpoch, validIds });
+  const splitContextKey = auth?.username && serverEpoch ? splitStorageKey(auth.username, window.location.origin, serverEpoch) : null;
+  const splitHydrated = splitContextKey !== null && splitHydratedKey === splitContextKey;
+  useEffect(() => {
+    if (!splitContextKey) { setSplit(defaultSplitState); setSplitHydratedKey(null); return; }
+    if (splitHydratedKey === splitContextKey) return;
+    setSplit(readSplitLayout(safeSessionStorage(), splitContextKey) ?? defaultSplitState);
+    setSplitHydratedKey(splitContextKey);
+  }, [splitContextKey, splitHydratedKey]);
+  useEffect(() => {
+    if (!splitHydrated || !splitContextKey) return;
+    writeSplitLayout(safeSessionStorage(), splitContextKey, split);
+  }, [split, splitHydrated, splitContextKey]);
+  useEffect(() => {
+    if (!verified || !tabs.hydrated || !splitHydrated) return;
+    setSplit(value => reconcileSplit(value, tabs.state.openIds, tabs.state.activeId));
+  }, [verified, tabs.hydrated, splitHydrated, tabs.state.openIds, tabs.state.activeId]);
   // Keep only logical ids across unverified reads; no old private labels or counts are rendered.
   const activity = useTabActivity(instances, verified ? activityQuery.data?.items : undefined, verified);
   const open = mobile ? drawer : sidebar;
   const closeDrawer = useCallback(() => setDrawer(false), []);
   const selectedId = intent.view === 'workbench' ? intent.instanceId ?? null : null;
+  const splitIds = useMemo(() => (
+    split.mode !== 'single' && intent.view === 'workbench'
+      ? new Set(split.paneIds.filter((id): id is string => !!id))
+      : undefined
+  ), [split.mode, split.paneIds, intent.view]);
   // Mounted frames are only meaningful for a verified list; otherwise "asleep" would be a guess.
   const mountedSet = useMemo(() => (verified ? new Set(mountedIds) : null), [verified, mountedIds]);
   useEffect(() => { const change = () => setIntent(parseIntent(window.location.hash)); window.addEventListener('hashchange', change); return () => window.removeEventListener('hashchange', change); }, []);
@@ -84,7 +116,8 @@ function Dashboard() {
     if (!tabs.hydrated || intent.view !== 'workbench' || !intent.instanceId) return;
     if (validIds && !validIds.has(intent.instanceId)) { navigate({ view: 'sessions' }); return; }
     tabs.open(intent.instanceId);
-  }, [tabs.hydrated, intent.view, intent.instanceId, tabs.open, validIds]);
+    if (splitHydrated) setSplit(value => focusOrAssignInstance(value, intent.instanceId!));
+  }, [tabs.hydrated, splitHydrated, intent.view, intent.instanceId, tabs.open, validIds]);
   // A refresh inside the workbench without an instance re-selects the restored tab only.
   // Restoring never hijacks a deliberate visit to the global session page.
   useEffect(() => {
@@ -126,7 +159,31 @@ function Dashboard() {
         : tabs.state.activeId ?? undefined;
     navigate({ view, instanceId });
   };
-  const activateTab = (instanceId: string) => { tabs.activate(instanceId); navigate({ view: 'workbench', instanceId }); };
+  const applySplit = useCallback((next: SplitState) => {
+    let openedAny = false;
+    for (const id of next.paneIds) {
+      if (id && !tabs.state.openIds.includes(id)) { tabs.open(id); openedAny = true; }
+    }
+    const focusId = next.paneIds[next.focusedPane] ?? next.paneIds.find(Boolean) ?? null;
+    if (focusId && (openedAny || focusId !== tabs.state.activeId)) tabs.activate(focusId);
+    setSplit(next);
+    if (focusId && (intent.view !== 'workbench' || intent.instanceId !== focusId)) {
+      navigate({ view: 'workbench', instanceId: focusId });
+    }
+  }, [tabs.state.openIds, tabs.state.activeId, tabs.open, tabs.activate, intent.view, intent.instanceId]);
+  const selectSplitMode = useCallback((mode: SplitMode) => {
+    const candidates = [...tabs.state.openIds, ...instances.map(item => item.id)];
+    applySplit(setSplitMode(split, mode, selectedId ?? tabs.state.activeId, candidates));
+  }, [split, selectedId, tabs.state.openIds, tabs.state.activeId, instances, applySplit]);
+  const focusPane = useCallback((paneIndex: number) => {
+    if (paneIndex < 0 || paneIndex >= split.paneIds.length) return;
+    applySplit(split.focusedPane === paneIndex ? split : { ...split, focusedPane: paneIndex });
+  }, [split, applySplit]);
+  const activateTab = (instanceId: string) => {
+    tabs.activate(instanceId);
+    setSplit(value => focusOrAssignInstance(value, instanceId));
+    navigate({ view: 'workbench', instanceId });
+  };
   // A tab close only changes the current page when that tab was the one on screen.
   const closeTab = (instanceId: string) => {
     const wasActive = tabs.state.activeId === instanceId;
@@ -138,6 +195,7 @@ function Dashboard() {
   // the connection manager keeps its own view.
   const closeAllTabs = () => {
     tabs.closeAll();
+    setSplit(defaultSplitState);
     if (intent.view === 'workbench') navigate({ view: 'sessions' });
   };
 
@@ -146,7 +204,7 @@ function Dashboard() {
       <button ref={sidebarButton} className="icon-button sidebar-toggle" aria-label={open ? '收起实例列表' : '展开实例列表'} title={open ? '收起实例列表' : '展开实例列表'} aria-expanded={open} aria-controls="instance-sidebar" onClick={() => { if (mobile) setDrawer(value => !value); else setPreferences({ sidebar: !sidebar }); }}><Icon name="sidebar" size={18} /></button>
       <a href={intentHash({ view: 'sessions' })} className="brand" title="多 NF 工作台"><span className="brand-mark">NF</span><span className="brand-copy">多 NF 工作台</span></a>
       <PageNavigation view={intent.view} onChange={updateView} />
-      <InstanceTabBar state={tabs.state} instances={instances} selectedId={selectedId} mountedIds={mountedSet} activityFor={activity.activityFor} lastSuccessFor={activity.lastSuccessFor} onActivate={activateTab} onClose={closeTab} onCloseAll={closeAllTabs} collapsed={tabsCollapsed} onToggleCollapsed={() => setTabsCollapsed(value => !value)} />
+      <InstanceTabBar state={tabs.state} instances={instances} selectedId={selectedId} mountedIds={mountedSet} activityFor={activity.activityFor} lastSuccessFor={activity.lastSuccessFor} onActivate={activateTab} onClose={closeTab} onCloseAll={closeAllTabs} onReorder={tabs.reorder} splitIds={splitIds} onDragTabChange={setDraggingTabId} collapsed={tabsCollapsed} onToggleCollapsed={() => setTabsCollapsed(value => !value)} />
       <div className="header-workbench-slot" ref={setWorkbenchSlot} hidden={intent.view !== 'workbench'} />
       <div className="header-end"><AppearanceMenu /><HeaderMenu label="账户菜单" icon={<Icon name="user" size={17} />} className="account-menu"><div className="menu-heading">{auth?.username}</div><button className="menu-item" data-close-menu disabled={signingOut} onClick={() => { void logout(); }}><Icon name="logout" size={17} />{signingOut ? '正在退出…' : '退出登录'}</button></HeaderMenu></div>
     </header>
@@ -157,7 +215,7 @@ function Dashboard() {
         <div className="global-notices"><ErrorBanner error={instancesQuery.error} retry={() => { void instancesQuery.refetch(); }} /><ErrorBanner error={changesError} /><ErrorBanner error={logoutError} /></div>
         {intent.view === 'sessions' && <SessionsPage key={revision} instances={instances} instanceId={intent.instanceId} />}
         {intent.view === 'connections' && <ConnectionsPage instances={instances} loading={instancesQuery.isPending} unavailable={instancesQuery.isError && !instancesQuery.data} />}
-        <WorkbenchPage key={serverEpoch ?? 'pending'} instances={instances} loaded={verified && tabs.hydrated} intent={intent} visible={intent.view === 'workbench'} toolbarTarget={workbenchSlot} openIds={tabs.state.openIds} onMountedChange={setMountedIds} />
+        <WorkbenchPage key={serverEpoch ?? 'pending'} instances={instances} loaded={verified && tabs.hydrated} intent={intent} visible={intent.view === 'workbench'} toolbarTarget={workbenchSlot} openIds={tabs.state.openIds} onMountedChange={setMountedIds} split={split} onSplitChange={applySplit} onSelectSplitMode={selectSplitMode} onFocusPane={focusPane} draggingTabId={draggingTabId} onDragTabChange={setDraggingTabId} />
       </main>
     </div>
   </div>;
@@ -165,7 +223,7 @@ function Dashboard() {
 export function App() {
   const { auth, ready } = useAppState();
   // Signing out or losing the session also drops every account's restored tab list.
-  useEffect(() => { if (ready && !auth) forgetStoredTabs(); }, [ready, auth]);
+  useEffect(() => { if (ready && !auth) { forgetStoredTabs(); clearSplitLayout(safeSessionStorage()); } }, [ready, auth]);
   if (!ready) return <main className="initial-loading"><div className="standalone-appearance"><AppearanceMenu /></div><span className="brand-mark">NF</span><p role="status">验证登录中…</p></main>;
   return auth ? <Dashboard /> : <LoginPage />;
 }

@@ -4,6 +4,7 @@ import { authSchema, routes, type Auth, type ChangesWithInstances } from '@nf-hu
 import { api, type ApiClient } from '../lib/api';
 import { ApiError } from '../lib/errors';
 import { parseIntent, reloadDocument } from '../lib/navigation';
+import { clearSplitLayout } from '../lib/splitLayout';
 import { clearTabs, tabsServerEpoch } from '../lib/tabs';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 15_000, retry: false, refetchOnWindowFocus: false }, mutations: { retry: false } } });
@@ -52,7 +53,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const clearAuth = useCallback(() => {
     authAttempt.current++;
     // Synchronous for logout, 401 and the cross-window logout broadcast; storage denial is harmless.
-    try { clearTabs(window.sessionStorage); } catch { /* sessionStorage may be disabled. */ }
+    try { clearTabs(window.sessionStorage); clearSplitLayout(window.sessionStorage); } catch { /* sessionStorage may be disabled. */ }
     setServerEpoch(null);
     api.reset(); api.setAuth(null);
     setAuth(null);

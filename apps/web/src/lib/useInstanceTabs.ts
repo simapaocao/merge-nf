@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { clearTabs, closeAllTabs, closeTab, emptyTabs, openTab, activateTab, pruneWhenKnown, readTabs, tabsStorageKey, writeTabs, type TabsState } from './tabs';
+import { clearTabs, closeAllTabs, closeTab, emptyTabs, moveTab, openTab, activateTab, pruneWhenKnown, readTabs, tabsStorageKey, writeTabs, type TabsState } from './tabs';
 
 type MinimalStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem' | 'key' | 'length'>;
 function safeStorage(): MinimalStorage | undefined {
@@ -42,8 +42,9 @@ export function useInstanceTabs({ username, serverEpoch, validIds }: { username:
   const activate = useCallback((instanceId: string) => setState(value => activateTab(value, instanceId)), []);
   const close = useCallback((instanceId: string) => setState(value => closeTab(value, instanceId)), []);
   const closeAll = useCallback(() => setState(value => closeAllTabs(value)), []);
+  const reorder = useCallback((fromId: string, toId: string, position: 'before' | 'after' = 'before') => setState(value => moveTab(value, fromId, toId, position)), []);
   const hydrated = contextKey !== null && hydratedKey === contextKey;
-  return { state: hydrated ? state : emptyTabs, hydrated, open, activate, close, closeAll };
+  return { state: hydrated ? state : emptyTabs, hydrated, open, activate, close, closeAll, reorder };
 }
 /** Session storage holds no credential material, so logout drops every account's entry. */
 export function forgetStoredTabs() { clearTabs(safeStorage()); }

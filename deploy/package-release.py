@@ -53,14 +53,15 @@ TEXT_GROUPS = {
     "apps/web/src/hooks": ("useAppearance.ts", "useAppState.tsx", "useData.ts", "useTabActivity.ts"),
     "apps/web/src/lib": (
         "api.ts", "errors.ts", "format.ts", "frames.ts", "httpAccessTemplates.ts", "mobileViewport.ts", "navigation.ts",
-        "tabActivity.ts", "tabs.ts", "useInstanceTabs.ts",
+        "splitLayout.ts", "tabActivity.ts", "tabs.ts", "useInstanceTabs.ts",
     ),
     "apps/web/src/pages": (
         "ConnectionsPage.tsx", "LoginPage.tsx", "SessionsPage.tsx", "WorkbenchPage.tsx",
     ),
     "apps/web/test": (
         "appearance.test.tsx", "components.test.tsx", "format.test.ts", "http-access.test.tsx",
-        "instance-tabs.test.tsx", "mobile-viewport.test.ts", "navigation.test.ts", "security-state.test.ts", "session-cards.test.tsx",
+        "instance-tabs.test.tsx", "mobile-viewport.test.ts", "navigation.test.ts", "security-state.test.ts",
+        "session-cards.test.tsx", "split-layout.test.tsx",
     ),
     "packages/protocol": ("package.json",),
     "packages/protocol/src": ("activity.ts", "connector.ts", "constants.ts", "index.ts", "session-metadata.ts", "summary.ts", "url.ts", "web.ts"),

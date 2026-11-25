@@ -10,8 +10,13 @@
    - 仅包含本次针对手机端（重点 **iPhone SE 3，375×667 CSS 视口，iOS Safari**）的 UI 操作优化、防双指缩放/防输入框自动放大防护、新增单元测试、发布清单白名单更新，以及本文档初版。
 3. **Commit 3 — `fix(auth): persist mobile login sessions with 30d sliding cookie and SameSite=Lax`**
    - 修复手机端频繁要求重新登录的问题：服务端会话有效期从固定 12 小时升级为 30 天并支持按 24 小时节流自动滑动续期；Cookie 改为 `SameSite=Lax` 并同时下发 `Max-Age` 与 `Expires`；登录表单补齐 `method="post"`、`name`/`id`/`htmlFor`/`type="submit"` 便于 iOS Safari / iCloud 钥匙串保存和自动填充密码。
+4. **Commit 4 — `docs: record deployment and same-site NF subdomain setup in handoff`**
+   - 记录 `10.8.0.1` 线上部署目录与同主域子域名（`nf1/nf2/nf12.smpc.asia`）改造方案。
+5. **Commit 5 — `feat(web): add draggable tab reorder and multi-NF split screen`**
+   - 实例标签栏支持鼠标拖拽排序（带左右插入提示线）、`Alt + ←/→` 键盘调序，以及「已打开」下拉菜单内 `↑/↓` 触屏调序；支持将标签直接拖入工作台边缘触发左/右/下分屏或拖入已有分屏切换/对调。
+   - 新增多 NF 窗口分屏设置（`单屏` / `左右双屏` / `上下双屏` / `三屏并排` / `左主右双`），支持指针拖拽分隔线实时调宽（双击均分、键盘可调）、每个分屏独立切换实例/刷新/对调/全屏/关闭；保持所有 `iframe` 位于 `.iframe-area` 稳定 DOM 顺序中仅改定位尺寸，切分屏/对调/改大小均**不重载**已保活 NF 页面；分屏状态按账号隔离持久化到 `sessionStorage` 并在登出时同步清理。
 
-后续如需查看本次全部改动，可直接查看 Commit 2（`26e1628`）与 Commit 3（`HEAD`），与前序功能改动（`e6f789e`）完全解耦。
+后续如需查看本次全部改动，可直接查看 Commit 2（`26e1628`）至 `HEAD`，与前序功能改动（`e6f789e`）完全解耦。
 
 ---
 
@@ -33,6 +38,11 @@
 | `apps/server/src/web-routes.ts` | 登录与登出使用统一时钟写入 `Set-Cookie`；在 `/api/*` 鉴权中间件中对非登出请求按 24 小时节流自动续期并回写刷新后的 `Set-Cookie`。 |
 | `apps/web/src/pages/LoginPage.tsx` | 登录表单补齐 `method="post"`、`htmlFor`/`id`/`name`、`type="text"`、`autoCorrect="off"` 及 `type="submit"`，改善 iOS Safari / iCloud 钥匙串密码保存与自动填充体验。 |
 | `apps/server/test/auth-http.test.ts` | 补充 30 天 `Max-Age`/`Expires`/`SameSite=Lax`、24 小时节流滑动续期、登出不续期、超过 30 天不活跃失效等服务端鉴权测试。 |
+| `apps/web/src/lib/tabs.ts` / `useInstanceTabs.ts` | 新增纯函数 `moveTab()` 与 `useInstanceTabs().reorder()`，支持按 `before`/`after` 调整标签顺序并保持 `activeId` 与 `{ v: 1, ids, active }` 存储格式不变。 |
+| `apps/web/src/lib/splitLayout.ts` | 新增多 NF 分屏状态机与纯几何引擎（5 种布局、安全比例裁剪、自动对调、关闭降级、按账号隔离 `sessionStorage` 持久化与登出清理）。 |
+| `apps/web/src/components/InstanceTabs.tsx` | 标签支持 HTML5 拖拽重排、`Alt+←/→` 键盘调序、「已打开」菜单 `↑/↓` 触屏排序，及分屏展示态高亮（`.in-split`）。 |
+| `apps/web/src/pages/WorkbenchPage.tsx` / `App.tsx` / `hooks/useAppState.tsx` / `styles.css` | 顶栏新增「分屏布局」菜单；工作台采用无 DOM 重挂百分比定位渲染多 NF `iframe`，配套分屏标题栏、可拖拽分隔线（含跨域 iframe 指针遮罩）、拖入分屏落区，以及 375px 手机端顶栏与 `16px` 下拉防缩放适配。 |
+| `apps/web/test/split-layout.test.tsx` | 新增 11 项单元测试覆盖标签拖拽排序、分屏状态转换、几何比例与分隔线、持久化隔离清理与标签栏分屏渲染语义；同步更新 `deploy/package-release.py` 白名单。 |
 
 ---
 
@@ -60,6 +70,6 @@
 ## 4. 验证情况
 
 - `bun run typecheck`：全部通过（core + web + nf-connector）。
-- `bun run test`：全部通过（含新增 `apps/web/test/mobile-viewport.test.ts`，前端共 140 项测试 0 失败）。
+- `bun run test`：全部通过（共 310 项测试 0 失败：protocol/server 72 + web 151 + nf-connector 87）。
 - `bun run --cwd apps/web build`：构建成功，`apps/web/dist` 已更新。
 - `deploy/package-release.py`：`check_source_inventory()` 与 `web_assets()` 校验通过。
