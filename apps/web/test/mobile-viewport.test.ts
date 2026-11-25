@@ -12,6 +12,10 @@ describe('移动端缩放防护与 SE3 适配基础', () => {
     expect(viewport).toContain('user-scalable=no');
     expect(viewport).toContain('viewport-fit=cover');
     expect(html).toContain('<meta name="format-detection" content="telephone=no" />');
+    expect(html).toContain('<meta name="apple-mobile-web-app-capable" content="yes" />');
+    expect(html).toContain('<meta name="mobile-web-app-capable" content="yes" />');
+    expect(html).toContain('<meta name="apple-mobile-web-app-status-bar-style" content="default" />');
+    expect(html).toContain('<meta name="apple-mobile-web-app-title" content="多 NF 工作台" />');
   });
 
   test('双指捏合与 Safari 手势事件被阻止，单指滚动与点击不受影响，卸载后清理监听', () => {
