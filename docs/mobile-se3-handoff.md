@@ -47,8 +47,13 @@
   - 防双指缩放逻辑作用于聚合工作台外壳与所有管理页面（全局会话、连接管理、登录页、抽屉、弹窗、顶栏与标签栏）。
   - 实例工作台内嵌的各 NF 原站 `iframe` 属于独立 origin，浏览器同源策略禁止父页面监听或拦截其内部触控手势；若原站内部页面需要禁止双指缩放，需在各 NF 原站前端单独处理。
   - 聚合工作台本身的登录态现已支持 30 天滑动持久化；但如果在 iPhone 上使用的是 Safari「无痕浏览」，关闭标签/浏览器仍会清空 Cookie。此外，若是指**工作台内嵌的某个 NF 原站**每次都要重新登录，通常是因为 iOS Safari 默认开启「阻止跨网站跟踪（ITP）」会拦截跨域 `iframe` 的第三方 Cookie（可在 iOS「设置 → Safari 浏览器 → 阻止跨网站跟踪」确认，或通过右上角「在新窗口打开」直连原站）。
-- **未改动线上/运行中环境**：
-  - 未重启或修改任何运行中的 NF 宿主与连接器；本次 Commit 3 同时改动了 `apps/server` 与 `apps/web`，部署时需一起更新服务端与前端产物（无需数据库迁移，既有在线会话也会在下一次请求时自动续期为 30 天）。
+- **线上部署与同主域子域名改造（已完成，位于 `10.8.0.1`）**：
+  - **工作台发版目录**：`/opt/nf-workbench/mobile-se3-release-20261125T0622Z-a193369`（复用原 Bun 镜像，无服务器 build，切换前 DB 备份位于 `backup/hub.sqlite`，原目录 `focus-release-20261124T192919Z-13cc26bc3023` 与 `compose.before.yaml` 均保留）。
+  - **同主域子域名方案（解决 iOS Safari 跨站 `iframe` 清空 NF `localStorage["narrafork_token"]` 问题）**：
+    - 阿里云 DNS 新增 3 条 VPN 内网 A 记录指向 `10.8.0.1`：`nf1.smpc.asia`、`nf2.smpc.asia`、`nf12.smpc.asia`（记录 ID 存于 `/opt/nf-workbench/secrets/lego-nf/dns-a-records.json`）。
+    - 独立签发 `*.smpc.asia` Let's Encrypt 泛域名证书至 `/opt/nf-workbench/tls-nf/live/current/`，配独立脚本 `/opt/nf-workbench/.deploy/vpn-nf/cert_nf_manager.py` 与每日自动续签定时器 `nf-workbench-nf-tls.timer`（原 `www.smpc.asia` 证书与 `nf-workbench-www-tls.timer` 未改动）。
+    - 固定 `10.8.0.2:7778` 的 NarraFork Local CA 根证书至 `/opt/nf-workbench/.deploy/nf2-upstream-root.crt`（严格 TLS，未跳过校验）；在 `/opt/nf-workbench/.deploy/Caddyfile` 新增 `https://nf1.smpc.asia`（→ `https://10.8.0.1:7778`）、`https://nf2.smpc.asia`（→ `https://10.8.0.2:7778`）、`https://nf12.smpc.asia`（→ `http://10.8.0.12:7778`），保留旧 `nf-1.internal` / `nf-12.internal`；保持 `compose.yaml` (`0644`) 与 `Caddyfile` (`0444`) 权限以兼容原 `cert_manager.py` 校验，切前备份位于 `/opt/nf-workbench/.deploy/vpn-nf/backup-before-cutover/`。
+    - 工作台数据库 3 台实例浏览器入口已更新为 `https://nf1.smpc.asia`、`https://nf2.smpc.asia`、`https://nf12.smpc.asia`（原连接器配对、代次与会话摘要完整保留，未改动或重启 3 台 NF 主机）。
 
 ---
 
