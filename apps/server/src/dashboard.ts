@@ -8,22 +8,41 @@ const join = `FROM session_summaries s JOIN instances i ON i.id=s.instanceId AND
 const activityJoin = `${join}
   LEFT JOIN activity_snapshots a ON a.instanceId=i.id AND a.generation=i.generation AND a.baseHash=i.snapshotHash AND a.available=1 AND i.lastSuccessAt>=? AND a.receivedAt>=?
   LEFT JOIN activity_items ai ON ai.instanceId=s.instanceId AND ai.id=s.id AND ai.generation=s.generation AND a.instanceId IS NOT NULL`;
+const metadataJoin = `
+  LEFT JOIN session_metadata_snapshots ms ON ms.instanceId=i.id AND ms.generation=i.generation AND ms.baseHash=i.snapshotHash AND ms.available=1
+  LEFT JOIN session_metadata_items sm ON sm.instanceId=s.instanceId AND sm.id=s.id AND sm.generation=s.generation AND ms.instanceId IS NOT NULL
+  LEFT JOIN session_summaries parent ON parent.instanceId=s.instanceId AND parent.generation=s.generation AND parent.id=sm.parentId AND sm.parentKnown=1`;
 const attention = '(coalesce(ai.reply,0)=1 OR coalesce(ai.approval,0)=1 OR coalesce(ai.error,0)=1 OR coalesce(ai.unread,0)=1)';
+// Focus is a display filter. Unknown stays visible; idle alone does not prove normal completion.
+const focusPredicate = `(s.status IN ('working','waiting','unknown') OR ${attention} OR coalesce(ai.backgroundWorkCount,0)>0)`;
 const automaticWait = `(s.status='waiting' AND ai.id IS NOT NULL AND NOT ${attention})`;
 const running = `(i.lastSuccessAt>=? AND (s.status='working' OR coalesce(ai.backgroundWorkCount,0)>0 OR ${automaticWait}))`;
 const groupPredicate = (group:SessionGroup) => group==='attention' ? attention : group==='running' ? `(NOT ${attention} AND ${running})` : `(NOT ${attention} AND NOT coalesce(${running},0))`;
 const UNSUPPORTED = Object.freeze({supported:false,count:null});
-type Row = Omit<SessionRow,'projectName'> & {projectName:string|null};
+type Row = Omit<SessionRow,'projectName'|'parentKnown'|'parentId'|'parentTitle'> & {
+  projectName:string|null; metadataParentKnown:number|null; metadataParentId:string|null; resolvedParentId:string|null; parentTitle:string|null;
+};
 type GroupRow = Row & {activityId:string|null;reply:number|null;approval:number|null;error:number|null;unread:number|null;backgroundWorkCount:number|null};
-const columns = 's.id,s.instanceId,s.title,s.status,s.projectId,s.projectName,s.updatedAt,s.lastMessageAt,i.lastSuccessAt';
+const columns = `s.id,s.instanceId,s.title,s.status,s.projectId,s.projectName,s.updatedAt,s.lastMessageAt,i.lastSuccessAt,sm.kind AS kind,
+  sm.parentKnown AS metadataParentKnown,sm.parentId AS metadataParentId,parent.id AS resolvedParentId,parent.title AS parentTitle`;
 const groupColumns = `${columns},ai.id AS activityId,ai.reply,ai.approval,ai.error,ai.unread,ai.backgroundWorkCount`;
 const freshColumn = "CASE WHEN i.lastSuccessAt>=? THEN 'fresh' ELSE 'stale' END AS freshness";
 const order = 'ORDER BY s.activityAt DESC,s.instanceId,s.id';
-function baseRow({projectName,...row}:Row):SessionRow {return projectName===null ? row : {...row,projectName};}
+function baseRow({projectName,kind,metadataParentKnown,metadataParentId,resolvedParentId,parentTitle,...row}:Row):SessionRow {
+  let base:SessionRow=projectName===null ? row : {...row,projectName};
+  // Preserve legacy rows without metadata; absent and explicit null are both unknown, never primary.
+  if(kind!=null) base={...base,kind};
+  if(metadataParentKnown!==null){
+    const parentKnown=metadataParentKnown===1&&(metadataParentId===null||resolvedParentId!==null);
+    base={...base,parentKnown,parentId:parentKnown?metadataParentId:null};
+    if(parentKnown&&resolvedParentId!==null&&parentTitle!==null) base={...base,parentTitle};
+  }
+  return base;
+}
 function groupRow({activityId,reply,approval,error,unread,backgroundWorkCount,...row}:GroupRow):GroupSessionRow {
   return {...baseRow(row),activity:activityId===null ? null : {reply:!!reply,approval:!!approval,error:!!error,unread:!!unread,backgroundWorkCount:backgroundWorkCount!}};
 }
-function listFilters(q:{instanceId?:string;standalone?:boolean;projectId?:string;status?:SessionStatus;includeArchived?:boolean;q?:string}) {
+function listFilters(q:{instanceId?:string;standalone?:boolean;projectId?:string;status?:SessionStatus;includeArchived?:boolean;focus?:boolean;q?:string}) {
   const where:string[] = [], args:SQLQueryBindings[] = [];
   if(q.instanceId){where.push('s.instanceId=?');args.push(q.instanceId);}
   if(q.standalone) where.push('s.projectId IS NULL');
@@ -31,6 +50,7 @@ function listFilters(q:{instanceId?:string;standalone?:boolean;projectId?:string
   if(q.status){where.push('s.status=?');args.push(q.status);}
   if(!q.includeArchived && q.status!=='archived') where.push("s.status<>'archived'");
   if(q.q){where.push('instr(s.searchTitle,?)>0');args.push(q.q.normalize('NFKC').toLowerCase());}
+  if(q.focus) where.push(focusPredicate);
   return {where,args};
 }
 /** Coverage is conservative over the selected active instance scope; a search cannot upgrade it. */
@@ -75,12 +95,14 @@ export function changes(db:Database,now:number){
 }
 export function sessions(db:Database,q:z.output<typeof sessionsQuerySchema>,now:number):SessionsPage {
   const cutoff=now-LIMITS.freshMs,{where,args}=listFilters(q);
-  const bindings:SQLQueryBindings[]=q.group ? [cutoff,cutoff,...args] : args;
+  const needsActivity=!!q.group||!!q.focus;
+  const bindings:SQLQueryBindings[]=needsActivity ? [cutoff,cutoff,...args] : args;
   if(q.group){where.push(groupPredicate(q.group));if(q.group!=='attention') bindings.push(cutoff);}
-  const clause=`${q.group?activityJoin:join}${where.length?' WHERE '+where.join(' AND '):''}`;
+  const source=needsActivity?activityJoin:join,filter=where.length?' WHERE '+where.join(' AND '):'';
+  const clause=`${source}${filter}`,rowClause=`${source}${metadataJoin}${filter}`;
   return db.transaction(()=>{
     const {total}=db.query<{total:number},SQLQueryBindings[]>(`SELECT count(*) AS total ${clause}`).get(...bindings)!;
-    const items=db.query<Row,SQLQueryBindings[]>(`SELECT ${columns},${freshColumn} ${clause} ${order} LIMIT ? OFFSET ?`)
+    const items=db.query<Row,SQLQueryBindings[]>(`SELECT ${columns},${freshColumn} ${rowClause} ${order} LIMIT ? OFFSET ?`)
       .all(cutoff,...bindings,q.pageSize,(q.page-1)*q.pageSize).map(baseRow);
     // Do not attach activity here: strict installed /api/sessions clients still receive SessionRow.
     return {total,items,page:q.page,pageSize:q.pageSize};
@@ -127,13 +149,13 @@ export function instanceActivity(db:Database,now:number):InstanceActivity {
 /** Complete filtered totals and mutually exclusive previews, never grouping just a currently loaded page. */
 export function sessionGroups(db:Database,q:z.output<typeof sessionGroupsQuerySchema>,now:number):SessionGroups {
   const cutoff=now-LIMITS.freshMs,{where,args}=listFilters(q);
-  const clause=(predicate?:string)=>`${activityJoin} WHERE ${[...where,predicate??'1'].join(' AND ')}`;
+  const clause=(predicate?:string,withMetadata=false)=>`${activityJoin}${withMetadata?metadataJoin:''} WHERE ${[...where,predicate??'1'].join(' AND ')}`;
   const bindings:SQLQueryBindings[]=[cutoff,cutoff,...args];
   return db.transaction(()=>{
     const totals=db.query<{total:number;attention:number;running:number},SQLQueryBindings[]>(`SELECT count(*) AS total,
       count(*) FILTER(WHERE ${attention}) AS attention,count(*) FILTER(WHERE ${groupPredicate('running')}) AS running ${clause()}`)
       .get(cutoff,...bindings)!;
-    const preview=(group:SessionGroup)=>db.query<GroupRow,SQLQueryBindings[]>(`SELECT ${groupColumns},${freshColumn} ${clause(groupPredicate(group))} ${order} LIMIT ?`)
+    const preview=(group:SessionGroup)=>db.query<GroupRow,SQLQueryBindings[]>(`SELECT ${groupColumns},${freshColumn} ${clause(groupPredicate(group),true)} ${order} LIMIT ?`)
       .all(cutoff,...bindings,...(group==='attention'?[]:[cutoff]),q.previewSize).map(groupRow);
     const activityCoverage=coverage(db,q.instanceId,cutoff),supported=activityCoverage!=='none';
     return {total:totals.total,previewSize:q.previewSize,

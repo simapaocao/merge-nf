@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
-import { LIMITS, SESSION_GROUP_PREVIEW, instanceActivitySchema, overviewSchema, projectsQuerySchema, sessionGroupsQuerySchema, sessionGroupsSchema, sessionsQuerySchema, sessionsSchema } from '@nf-hub/protocol';
+import { LIMITS, SESSION_GROUP_PREVIEW, activityHash, instanceActivitySchema, overviewSchema, projectsQuerySchema, sessionGroupsQuerySchema, sessionGroupsSchema, sessionsQuerySchema, sessionsSchema, type ActivityItem } from '@nf-hub/protocol';
 import { openDatabase } from '../src/db';
 import { instanceActivity, overview, projects, sessionGroups, sessions } from '../src/dashboard';
+import { receiveActivity } from '../src/activity';
+import { instanceRecord } from '../src/instances';
 import { revoke } from '../src/pairing';
 import { BASE, httpFixture, makeActor, publish, summary } from './fixture';
 
@@ -86,6 +88,66 @@ test('旧查询无行为变化；group 追加在旧查询之上，attention 不�
   revoke(db,a.id,BASE);
   expect(list({group:'running'}).total).toBe(0);
   expect(groups().running.total).toBe(0);
+});
+
+test('focus先过滤再分页：保留idle待处理/后台与unknown，旧默认与分区完整总数不变',async()=>{
+  const a=makeActor(db,'focus',BASE);
+  const rows=[
+    summary('idle-new',{updatedAt:BASE+500,projectId:'p'}),summary('idle-next',{updatedAt:BASE+400,projectId:'p'}),
+    summary('pending',{updatedAt:BASE+300,projectId:'p'}),summary('background',{updatedAt:BASE+200,projectId:'p'}),
+    summary('working',{status:'working',updatedAt:BASE+100}),summary('waiting',{status:'waiting',updatedAt:BASE+50}),
+    summary('unknown',{status:'unknown'}),summary('archive',{status:'archived',updatedAt:BASE+25}),
+  ];
+  await publish(db,a,rows,BASE);
+  const base=instanceRecord(db,a.id),items:ActivityItem[]=rows.map(row=>({id:row.id,reply:row.id==='pending',approval:false,error:false,unread:row.id==='archive',backgroundWorkCount:row.id==='background'?2:0}));
+  await receiveActivity(db,a.hash,{protocolVersion:1,generation:a.generation,runId:base.runSeq,baseHash:base.snapshotHash,available:true,count:items.length,hash:await activityHash(items),items},()=>BASE);
+  const unfiltered=list({pageSize:'1'});
+  expect(unfiltered.total).toBe(7);expect(unfiltered.items[0]?.id).toBe('idle-new');
+  expect(list({focus:'false'})).toEqual(list());expect(groups({focus:'false'})).toEqual(groups());
+  const page1=list({focus:'true',pageSize:'1'}),page2=list({focus:'true',pageSize:'1',page:'2'});
+  expect(page1.total).toBe(5);expect(page1.items[0]?.id).toBe('pending');expect(page2.items[0]?.id).toBe('background');
+  expect(list({focus:'true'}).items.map(row=>row.id)).toEqual(['pending','background','working','waiting','unknown']);
+  expect(list({focus:'true',status:'idle'}).total).toBe(2);
+  expect(list({focus:'true',instanceId:a.id,projectId:'p'}).items.map(row=>row.id)).toEqual(['pending','background']);
+  expect(list({focus:'true',standalone:'true'}).total).toBe(3);
+  expect(list({focus:'true',q:'pending'}).total).toBe(1);
+  expect(list({focus:'true',includeArchived:'true'}).total).toBe(6);
+  expect(list({focus:'true',status:'archived'}).items[0]?.id).toBe('archive');
+  const focused=groups({focus:'true',previewSize:'1'});
+  expect(focused).toMatchObject({total:5,attention:{total:1},running:{total:3},recent:{total:1}});
+  for(const group of ['attention','running','recent'] as const){
+    const page=list({focus:'true',group,pageSize:'1'});
+    expect(page.total).toBe(focused[group].total!);expect(page.items).toHaveLength(1);
+    expect(focused[group].items[0]?.id).toBe(page.items[0]?.id);
+  }
+  // Display focus never narrows the publication or global/instance status statistics.
+  expect(overview(db,BASE).freshCounts?.total).toBe(8);expect(activity().items[0]?.counts?.total).toBe(7);
+});
+
+test('focus仅使用有效活动，过期增强不保留idle；旧快照working/waiting/unknown仍是最近记录',async()=>{
+  const a=makeActor(db,'focus-expiry',BASE);
+  const rows=[summary('pending'),summary('background'),summary('idle'),summary('working',{status:'working'}),summary('waiting',{status:'waiting'}),summary('unknown',{status:'unknown'})];
+  await publish(db,a,rows,BASE);
+  expect(list({focus:'true'}).items.map(row=>row.id).sort()).toEqual(['unknown','waiting','working']);
+  const base=instanceRecord(db,a.id),items:ActivityItem[]=rows.map(row=>({id:row.id,reply:row.id==='pending',approval:false,error:false,unread:false,backgroundWorkCount:row.id==='background'?1:0}));
+  await receiveActivity(db,a.hash,{protocolVersion:1,generation:a.generation,runId:base.runSeq,baseHash:base.snapshotHash,available:true,count:items.length,hash:await activityHash(items),items},()=>BASE);
+  await publish(db,a,rows,BASE+60_000);
+  const expired=BASE+LIMITS.freshMs+1;
+  expect(list({focus:'true'},expired).items.map(row=>row.id).sort()).toEqual(['unknown','waiting','working']);
+  expect(groups({focus:'true'},expired)).toMatchObject({total:3,attention:{supported:false,total:null,coverage:'none'},running:{total:1},recent:{total:2}});
+  const stale=expired+60_000;
+  const old=groups({focus:'true'},stale);
+  expect(old).toMatchObject({total:3,running:{total:0},recent:{total:3}});
+  expect(old.recent.items.every(row=>row.freshness==='stale' && row.activity===null)).toBe(true);
+  expect(list({focus:'true',group:'recent'},stale).total).toBe(3);
+  expect(list({},stale).total).toBe(6);
+});
+
+test('focus查询沿用严格布尔编码，缺省不启用且不接受伪布尔值',()=>{
+  for(const schema of [sessionsQuerySchema,sessionGroupsQuerySchema]){
+    expect(schema.parse({}).focus).toBeUndefined();expect(schema.parse({focus:'false'}).focus).toBe(false);expect(schema.parse({focus:'true'}).focus).toBe(true);
+    for(const focus of ['','0','1','TRUE','false OR 1=1',true,false]) expect(schema.safeParse({focus}).success).toBe(false);
+  }
 });
 
 test('约 5000 条摘要下分组总数与预览上限、分页都正确',async()=>{

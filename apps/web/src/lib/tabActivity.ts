@@ -1,3 +1,5 @@
+import type { Instance } from '@nf-hub/protocol';
+
 /** View model for the counts a tab may show. Missing or stale data stays unknown instead of becoming 0. */
 export type TabActivityView = {
   /**
@@ -9,7 +11,6 @@ export type TabActivityView = {
   background: { supported: boolean; count: number | null };
 };
 export const unknownActivity: TabActivityView = { running: null, attention: { supported: false, count: null }, background: { supported: false, count: null } };
-export const UNSUPPORTED_HINT = '尚未上报';
 export const STALE_HINT = '暂无新鲜数据';
 export const SCOPE_HINT = '处理权限以原站账号为准';
 export const COUNT_SCOPE_HINT = '仅同步范围，未归档会话';
@@ -31,11 +32,20 @@ export function toActivityView(facts: ActivityFacts | undefined, current: boolea
     background: { supported: background !== null, count: background },
   };
 }
-/** A zero count is hidden; an unknown one is shown as an em dash, never as zero. */
+/** Known running counts include a genuine zero; unknown values have no numeric badge. */
 export function countBadge(value: number | null): { text: string; muted: boolean } | null {
-  if (value === null) return { text: '—', muted: true };
-  if (value === 0) return null;
+  if (value === null) return null;
   return { text: String(value), muted: false };
+}
+/** Use the reported instance state when a current running count is unavailable. */
+export function tabUnavailableStatus(instance: Pick<Instance, 'connection' | 'freshness' | 'lastError'>): string {
+  if (instance.connection === 'unpaired') return '未配对';
+  if (instance.connection === 'revoked') return '已撤销';
+  if (instance.connection === 'lost') return '离线';
+  if (instance.freshness === 'stale') return '数据过期';
+  if (instance.lastError) return '同步失败';
+  if (instance.freshness === 'never') return '未同步';
+  return '暂无数据';
 }
 /** Absolute time only: the tooltip must render identically on the server and after hydration. */
 export function tabCountsTitle(activity: TabActivityView, lastSuccessAt: number | null): string {

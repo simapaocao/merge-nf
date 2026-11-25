@@ -57,6 +57,29 @@ BEGIN
   DELETE FROM activity_items WHERE instanceId=NEW.id;
   DELETE FROM activity_snapshots WHERE instanceId=NEW.id;
 END;
+`, String.raw`
+CREATE TABLE session_metadata_snapshots(
+  instanceId TEXT PRIMARY KEY REFERENCES instances(id) ON DELETE CASCADE,
+  generation INTEGER NOT NULL, runId INTEGER NOT NULL,
+  baseHash TEXT NOT NULL, hash TEXT, receivedAt INTEGER NOT NULL,
+  available INTEGER NOT NULL CHECK(available IN (0,1)),
+  CHECK((available=1 AND hash IS NOT NULL) OR (available=0 AND hash IS NULL))
+) STRICT;
+CREATE TABLE session_metadata_items(
+  instanceId TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+  id TEXT NOT NULL, generation INTEGER NOT NULL,
+  kind TEXT CHECK(kind IS NULL OR kind IN ('primary','subagent')),
+  parentKnown INTEGER NOT NULL CHECK(parentKnown IN (0,1)), parentId TEXT,
+  CHECK(parentKnown=1 OR parentId IS NULL), CHECK(parentId IS NULL OR parentId<>id),
+  PRIMARY KEY(instanceId,id)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX session_metadata_generation ON session_metadata_items(instanceId,generation);
+CREATE TRIGGER retire_session_metadata_base AFTER UPDATE OF authState,generation,snapshotHash ON instances
+WHEN NEW.authState<>'active' OR NEW.generation<>OLD.generation OR NEW.snapshotHash IS NOT OLD.snapshotHash
+BEGIN
+  DELETE FROM session_metadata_items WHERE instanceId=NEW.id;
+  DELETE FROM session_metadata_snapshots WHERE instanceId=NEW.id;
+END;
 `];
 export const SCHEMA_VERSION = migrations.length;
 export function migrate(db: Database) {

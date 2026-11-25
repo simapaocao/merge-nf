@@ -1,6 +1,7 @@
 import { LIMITS, PROTOCOL_VERSION, activityHash, activityPublicationSchema, pairCodeSchema, pairRequestSchema, snapshotHash, snapshotRequestSchema, type RunResponse } from "@nf-hub/protocol";
+import { sessionMetadataHash, sessionMetadataItemsSchema, sessionMetadataPublicationSchema, type SessionMetadataItem } from "@nf-hub/protocol";
 import { collectActivity } from "./activity";
-import { collectSummaries } from "./collection";
+import { collectSessionRelationships, collectSummaries, type RelationshipsCollection } from "./collection";
 import { DEFAULT_ACTIVITY, DEFAULT_SETTINGS, DEFAULT_STATUS, HostRepository, bindingError, bindingKey, isBound, parseSettings, type ActivityPreference, type ActivityStatus, type ActivitySupport, type BoundCredential, type ConnectionStatus, type Settings } from "./config";
 import { CREDENTIAL_KEY, PAIRING_KEY, PLUGIN_VERSION } from "./constants";
 import { ACTIVITY_ERROR_CODES, ConnectorError, assertActive, collectionFailure, safeError } from "./errors";
@@ -8,13 +9,18 @@ import { HostRpcError, type HostApi } from "./host-rpc";
 import { CenterClient } from "./transport";
 import type { CenterTrust } from "./center-trust";
 
+export interface SessionMetadataStatus {
+  support: "unknown" | "available" | "unsupported"; lastErrorCode: string | null;
+  parentSupport: RelationshipsCollection["support"]; parentErrorCode: string | null;
+}
 export interface ConnectorView {
   settings: Settings; status: ConnectionStatus; active: boolean; paired: boolean; binding: string; instanceId: string | null; generation: number | null; includesProjectNames: boolean | null;
   /** Additive, non-secret activity metadata for the panel. Toggling it never changes `binding`. */
   activityEnabled: boolean; activityNeedsClear: boolean; activityPreferenceSaved: boolean; activitySupport: ActivitySupport; activity: ActivityStatus;
+  sessionMetadata: SessionMetadataStatus;
 }
-/** The activity method is optional so a center client built without it degrades to "no side channel" instead of failing. */
-export type CenterLike = Pick<CenterClient, "pair" | "run" | "snapshot" | "failed"> & Partial<Pick<CenterClient, "activity">>;
+/** Older clients may implement only the unchanged base protocol. */
+export type CenterLike = Pick<CenterClient, "pair" | "run" | "snapshot" | "failed"> & Partial<Pick<CenterClient, "activity" | "sessionMetadata">>;
 export interface ControllerOptions { now?: () => number; random?: () => number; center?: (url: string, trust: CenterTrust) => CenterLike; collect?: typeof collectSummaries; collectActivity?: typeof collectActivity; }
 
 export function nextDelay(interval: number, failures: number, random: number): number {
@@ -46,6 +52,10 @@ export class ConnectorController {
   private readonly activityUnsupported = new Set<string>();
   /** A host that reports the activity query as unknown is asked once per activation, not every round. */
   private hostActivityUnsupported = false;
+  private metadataState: SessionMetadataStatus = { support: "unknown", lastErrorCode: null, parentSupport: "unknown", parentErrorCode: null };
+  private hostRelationshipsUnsupported = false;
+  /** Short, destination-specific 404 cache, independent of opt-in activity. */
+  private readonly metadataUnsupportedUntil = new Map<string, number>();
   private cred: BoundCredential | null = null;
   private active = false;
   private loaded = false;
@@ -67,6 +77,7 @@ export class ConnectorController {
       binding: bindingKey(this.cfg), instanceId: this.cred?.pairing.instanceId ?? null, generation: this.cred?.pairing.generation ?? null, includesProjectNames: this.cred?.projectNames ?? null,
       activityEnabled: this.activityPreferenceSaved && this.activityPref.enabled, activityNeedsClear: this.activityPref.needsClear,
       activityPreferenceSaved: this.activityPreferenceSaved, activitySupport: this.state.activity.support, activity: this.state.activity,
+      sessionMetadata: this.metadataState,
     });
   }
 
@@ -129,7 +140,7 @@ export class ConnectorController {
   }
   async activate(): Promise<void> {
     const epoch = this.halt(); this.active = true; this.loaded = false; this.cred = null;
-    this.activityPreferenceSaved = false; this.hostActivityUnsupported = false;
+    this.activityPreferenceSaved = false; this.hostActivityUnsupported = false; this.hostRelationshipsUnsupported = false;
     const attempt = (index: number): Promise<void> => this.serial(async () => {
       if (!this.active || this.epoch !== epoch || this.loaded) return;
       try { await this.load(epoch, true); if (epoch === this.epoch) await this.publishState(); }
@@ -399,6 +410,49 @@ export class ConnectorController {
       if (this.activityAbort === activity) this.activityAbort = null;
     }
   }
+  /** Type comes from the exact base list; the optional parent query is limited to the successful base ID set. */
+  private async publishSessionMetadata(epoch: number, credential: BoundCredential, client: CenterLike, signal: AbortSignal, base: { runId: number; hash: string; ids: readonly string[]; deadline: number }, metadata: readonly SessionMetadataItem[] | undefined): Promise<void> {
+    const send = client.sessionMetadata?.bind(client);
+    if (!send) return;
+    const destination = JSON.stringify([credential.baseUrl, credential.centerCaSha256]);
+    const remaining = base.deadline - performance.now();
+    if ((this.metadataUnsupportedUntil.get(destination) ?? 0) > performance.now()) {
+      this.metadataState = { ...this.metadataState, support: "unsupported", lastErrorCode: "SESSION_METADATA_UNSUPPORTED" }; return;
+    }
+    const budget = new AbortController(), timer = setTimeout(() => budget.abort(), Math.max(1, remaining));
+    const bounded = AbortSignal.any([signal, budget.signal]);
+    try {
+      this.check(epoch, bounded);
+      if (remaining <= 0) throw new ConnectorError("RUN_EXPIRED");
+      const items = sessionMetadataItemsSchema.safeParse(metadata), expected = new Set(base.ids);
+      const complete = items.success && items.data.length === expected.size && items.data.every(item => expected.has(item.id));
+      let projected: SessionMetadataItem[] | null = null;
+      if (items.success && complete) {
+        const relationships: RelationshipsCollection = this.hostRelationshipsUnsupported
+          ? { items: items.data.map(item => ({ id: item.id, kind: item.kind, parentKnown: false, parentId: null })), support: "unsupported", errorCode: "RELATIONSHIPS_UNSUPPORTED" }
+          : await collectSessionRelationships(this.host, items.data, { signal: bounded, now: () => performance.now() });
+        this.check(epoch, bounded);
+        if (relationships.support === "unsupported") this.hostRelationshipsUnsupported = true;
+        this.metadataState = { ...this.metadataState, parentSupport: relationships.support, parentErrorCode: relationships.errorCode };
+        projected = relationships.items;
+      }
+      const envelope = { protocolVersion: PROTOCOL_VERSION, generation: credential.pairing.generation, runId: base.runId, baseHash: base.hash };
+      const publication = projected !== null
+        ? sessionMetadataPublicationSchema.parse({ ...envelope, available: true, count: projected.length, hash: await sessionMetadataHash(projected), items: projected })
+        : sessionMetadataPublicationSchema.parse({ ...envelope, available: false });
+      await this.verify(epoch, credential, bounded);
+      this.check(epoch, bounded);
+      const receipt = await send(credential, publication, bounded); this.check(epoch, bounded);
+      if (receipt.accepted !== true) throw new ConnectorError("RESPONSE_INVALID");
+      this.metadataUnsupportedUntil.delete(destination);
+      this.metadataState = { ...this.metadataState, support: complete ? "available" : "unknown", lastErrorCode: complete ? null : "SESSION_METADATA_INCOMPLETE" };
+    } catch (error) {
+      if (!this.active || epoch !== this.epoch || signal.aborted) return;
+      const code = budget.signal.aborted ? "RUN_EXPIRED" : error instanceof ConnectorError ? error.code : "RESPONSE_INVALID";
+      if (code === "SESSION_METADATA_UNSUPPORTED") this.metadataUnsupportedUntil.set(destination, performance.now() + LIMITS.freshMs);
+      this.metadataState = { ...this.metadataState, support: code === "SESSION_METADATA_UNSUPPORTED" ? "unsupported" : "unknown", lastErrorCode: code };
+    } finally { clearTimeout(timer); }
+  }
   private async round(epoch: number): Promise<void> {
     const cfg = structuredClone(this.cfg), credential = this.cred;
     if (!credential || !this.canRun()) return;
@@ -408,6 +462,7 @@ export class ConnectorController {
     this.state = { ...this.state, state: "collecting", lastAttemptAt: this.now(), nextAttemptAt: null };
     try {
       await this.verify(epoch, credential, ctrl.signal);
+      const runDeadline = performance.now() + LIMITS.runMs;
       run = await client.run(credential, ctrl.signal); this.check(epoch, ctrl.signal);
       // The lease is interpreted by the center. The collection budget is monotonic and independent of host wall-clock skew.
       const deadline = performance.now() + LIMITS.collectMs, budget = new AbortController(), timer = setTimeout(() => budget.abort(), LIMITS.collectMs);
@@ -425,6 +480,9 @@ export class ConnectorController {
       submitted = true; const receipt = await client.snapshot(credential, request, ctrl.signal); this.check(epoch, ctrl.signal);
       this.failures = 0; this.state = { ...this.state, state: "ready", lastSuccessAt: receipt.acceptedAt, lastCount: request.count, lastErrorCode: null, projectNames: credential.projectNames ? "available" : "unavailable" };
       delay = nextDelay(cfg.intervalMs, 0, this.random());
+      // Type metadata follows every successful base round, including an unchanged base hash, without activity consent.
+      try { await this.publishSessionMetadata(epoch, credential, client, ctrl.signal, { runId: run.runId, hash: request.hash, ids: request.summaries.map(row => row.id), deadline: runDeadline }, collection.sessionMetadata); }
+      catch { /* A metadata failure cannot change base health or suppress the independent activity channel. */ }
       // Optional side channel, only after the base publication above is already accepted. Everything inside is
       // isolated: an unsupported host, a missing center route or a denied permission cannot retract this success,
       // cannot change the retry delay and cannot touch the base credential.

@@ -16,7 +16,7 @@ from html.parser import HTMLParser
 import zipfile
 
 VERSION = "0.1.0"
-PLUGIN_VERSION = "0.1.3"
+PLUGIN_VERSION = "0.1.4"
 NAME = f"nf-workbench-{VERSION}"
 ROOT = Path(__file__).absolute().parent.parent
 MAX_MEMBERS = 192
@@ -29,18 +29,18 @@ PLUGIN = f"packages/nf-connector/dist/local.nf-hub.connector-{PLUGIN_VERSION}.nf
 # Exact filenames, not a repository walk or a root copy followed by exclusions.
 TEXT_GROUPS = {
     "": (
-        "package.json", "bun.lock", "tsconfig.json", ".gitignore", ".env.example", ".dockerignore",
+        "package.json", "bun.lock", "tsconfig.json", "README.md", ".gitignore", ".env.example", ".dockerignore",
     ),
     "apps/server": ("package.json",),
     "apps/server/src": (
         "activity.ts", "app.ts", "auth.ts", "backup.ts", "cli.ts", "config.ts", "connection.ts",
         "connector-routes.ts", "dashboard.ts", "db.ts", "errors.ts", "http-types.ts",
         "instances.ts", "limits.ts", "main.ts", "migrations.ts", "pairing.ts",
-        "static.ts", "sync.ts", "web-routes.ts",
+        "session-metadata.ts", "static.ts", "sync.ts", "web-routes.ts",
     ),
     "apps/server/test": (
         "activity.test.ts", "auth-http.test.ts", "dashboard.test.ts", "fixture.ts", "groups.test.ts", "instances.test.ts",
-        "limits.test.ts", "recovery.test.ts", "static.test.ts", "sync.test.ts",
+        "limits.test.ts", "recovery.test.ts", "session-metadata.test.ts", "static.test.ts", "sync.test.ts",
     ),
     "apps/web": ("package.json", "index.html", "tsconfig.json", "vite.config.ts"),
     "apps/web/public": ("theme-init.js",),
@@ -63,7 +63,7 @@ TEXT_GROUPS = {
         "instance-tabs.test.tsx", "navigation.test.ts", "security-state.test.ts", "session-cards.test.tsx",
     ),
     "packages/protocol": ("package.json",),
-    "packages/protocol/src": ("activity.ts", "connector.ts", "constants.ts", "index.ts", "summary.ts", "url.ts", "web.ts"),
+    "packages/protocol/src": ("activity.ts", "connector.ts", "constants.ts", "index.ts", "session-metadata.ts", "summary.ts", "url.ts", "web.ts"),
     "packages/protocol/test": ("contract.test.ts", "url.test.ts"),
     "packages/nf-connector": ("package.json", "manifest.json", "tsconfig.json"),
     "packages/nf-connector/src": (
@@ -74,7 +74,7 @@ TEXT_GROUPS = {
     "packages/nf-connector/scripts": ("build.ts", "check-host-manifest.ts", "package.ts"),
     "packages/nf-connector/test": (
         "activation-read.test.ts", "activity-controller.test.ts", "activity.test.ts", "center-trust.test.ts", "collection.test.ts", "controller.test.ts",
-        "ephemeral-pki.ts", "fixtures.ts", "host-transport.test.ts",
+        "ephemeral-pki.ts", "fixtures.ts", "host-transport.test.ts", "session-metadata.test.ts",
     ),
     "deploy": (
         ".env.example", "Caddy.Dockerfile", "Caddyfile", "Caddyfile.nf.example", "compose.public.yaml",

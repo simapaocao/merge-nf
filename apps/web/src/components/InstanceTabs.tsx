@@ -4,7 +4,7 @@ import { HeaderMenu } from './Common';
 import { Icon } from './Icon';
 import { connectionLabel } from '../lib/format';
 import { keyboardTarget, nextActiveOnClose, type TabsState } from '../lib/tabs';
-import { countBadge, tabCountsTitle, COUNT_SCOPE_HINT, SCOPE_HINT, type TabActivityView, UNSUPPORTED_HINT } from '../lib/tabActivity';
+import { countBadge, tabCountsTitle, tabUnavailableStatus, COUNT_SCOPE_HINT, SCOPE_HINT, type TabActivityView } from '../lib/tabActivity';
 
 const domId = (prefix: string, instanceId: string) => `${prefix}-${instanceId.replace(/[^A-Za-z0-9_-]/g, '_')}`;
 
@@ -60,8 +60,11 @@ export function InstanceTabBar({ state, instances, selectedId, mountedIds, activ
     return [{
       instanceId, alias: instance.alias, active, revoked, dormant, activity,
       connection: connectionLabel(instance), online: instance.connection === 'connected' && instance.freshness === 'fresh',
-      attention: countBadge(activity.attention.supported ? activity.attention.count : null),
+      attention: activity.attention.supported && activity.attention.count === 0 ? null
+        : activity.attention.supported && activity.attention.count !== null && activity.attention.count > 0 ? countBadge(activity.attention.count)
+          : { text: '?', muted: true },
       running: countBadge(activity.running),
+      unavailable: tabUnavailableStatus(instance),
       title: [
         `${instance.alias} · ${instance.browserBaseUrl}`,
         revoked ? '授权已撤销' : dormant ? '休眠后重载，未发输入不保留' : '',
@@ -142,9 +145,8 @@ export function InstanceTabBar({ state, instances, selectedId, mountedIds, activ
             <button ref={element => { if (element) tabs.current.set(row.instanceId, element); else tabs.current.delete(row.instanceId); }} role="tab" id={domId('instance-tab', row.instanceId)} className={`instance-tab ${row.active ? 'active' : ''} ${row.dormant ? 'dormant' : ''}`} aria-selected={row.active} aria-controls="workbench-panel" tabIndex={row.active || (!selectedId && rows[0]?.instanceId === row.instanceId) ? 0 : -1} title={row.title} onClick={() => activate(row.instanceId)}>
               <span className={`tiny-dot ${row.online ? 'online' : ''}`} title={`连接状态：${row.connection}`} aria-label={`连接状态：${row.connection}`} />
               <span className="instance-tab-name">{row.alias}</span>
-              {row.attention && <span className={`tab-badge attention ${row.attention.muted ? 'muted' : ''}`} aria-label={row.activity.attention.supported ? `需要处理 ${row.attention.text} 个会话` : `需要处理${UNSUPPORTED_HINT}`} title={row.activity.attention.supported ? `${COUNT_SCOPE_HINT} · ${SCOPE_HINT}` : '未提供活动信息'}><span className="tab-badge-label">需要处理</span>{row.attention.text}</span>}
-              {row.running && <span className={`tab-badge running ${row.running.muted ? 'muted' : ''}`} aria-label={row.running.muted ? '运行会话数未知' : `运行 ${row.running.text} 个会话`} title={row.running.muted ? '暂无新鲜数据' : COUNT_SCOPE_HINT}><span className="tab-badge-label">运行</span>{row.running.text}</span>}
-              {row.revoked && <span className="tab-dormant">已撤销</span>}
+              {row.attention && <span className={`tab-badge ${row.attention.muted ? 'muted' : 'attention'}`} aria-label={row.attention.muted ? '待处理状态未同步' : `待处理 ${row.attention.text} 个会话`} title={row.attention.muted ? '待处理状态未同步' : `${COUNT_SCOPE_HINT} · ${SCOPE_HINT}`}><span className="tab-badge-label">待处理</span>{row.attention.text}</span>}
+              {row.running ? <span className="tab-badge running" aria-label={`运行 ${row.running.text} 个会话`} title={COUNT_SCOPE_HINT}><span className="tab-badge-label">运行</span>{row.running.text}</span> : <span className="tab-status" title={row.unavailable}>{row.unavailable}</span>}
               {row.dormant && <span className="tab-dormant">休眠</span>}
             </button>
             <button className="instance-tab-close" aria-label={`关闭 ${row.alias} 标签`} title="仅关闭标签，不停止 NF" onClick={() => requestClose(row.instanceId)}><Icon name="close" size={12} /></button>

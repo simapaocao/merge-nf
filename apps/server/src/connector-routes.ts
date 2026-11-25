@@ -1,10 +1,11 @@
-import { ACTIVITY_SNAPSHOT_ROUTE, LIMITS, failedRequestSchema, routes, runRequestSchema } from '@nf-hub/protocol';
+import { ACTIVITY_SNAPSHOT_ROUTE, SESSION_METADATA_ROUTE, LIMITS, failedRequestSchema, routes, runRequestSchema } from '@nf-hub/protocol';
 import { receiveActivity } from './activity';
 import { fail, validated } from './errors';
 import type { Router, Services } from './http-types';
 import { readJson } from './limits';
 import { bearerHash, claim, credential } from './pairing';
 import { acceptSnapshot, failRun, startRun } from './sync';
+import { receiveSessionMetadata } from './session-metadata';
 
 function runNumber(text: string) {
   const n = Number(text); if (!/^[1-9]\d*$/.test(text) || !Number.isSafeInteger(n)) fail(400,'INVALID_INPUT'); return n;
@@ -34,6 +35,10 @@ export function connectorRoutes(app: Router, {db,clock,admission}: Services) {
   app.post(ACTIVITY_SNAPSHOT_ROUTE, async c => {
     admission.rate(`activity:${c.get('instanceId')}`,16,60_000);
     return admission.withSlot('activity',2,async () => c.json(await receiveActivity(db,c.get('tokenHash'),await readJson(c.req.raw,LIMITS.snapshotBytes),clock)));
+  });
+  app.post(SESSION_METADATA_ROUTE, async c => {
+    admission.rate(`sessionMetadata:${c.get('instanceId')}`,16,60_000);
+    return admission.withSlot('sessionMetadata',2,async () => c.json(await receiveSessionMetadata(db,c.get('tokenHash'),await readJson(c.req.raw,LIMITS.snapshotBytes),clock)));
   });
   app.post(`${routes.runs}/:id/failed`, async c => {
     const id = runNumber(c.req.param('id')), data = validated(failedRequestSchema,await readJson(c.req.raw,2048));

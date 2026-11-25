@@ -1,4 +1,5 @@
 import { ACTIVITY_SNAPSHOT_ROUTE, LIMITS, PROTOCOL_VERSION, activityPublicationSchema, activityReceiptSchema, failedRequestSchema, pairRequestSchema, pairResponseSchema, routes, runRequestSchema, runResponseSchema, snapshotRequestSchema, snapshotResponseSchema, type ActivityPublication, type ActivityReceipt, type FailedRequest, type PairRequest, type PairResponse, type RunResponse, type SnapshotRequest, type SnapshotResponse } from "@nf-hub/protocol";
+import { SESSION_METADATA_ROUTE, sessionMetadataPublicationSchema, sessionMetadataReceiptSchema, type SessionMetadataPublication, type SessionMetadataReceipt } from "@nf-hub/protocol";
 import { normalizeBaseUrl, type BoundCredential } from "./config";
 import { ConnectorError, assertActive } from "./errors";
 import { centerTrust, type CenterTrust } from "./center-trust";
@@ -13,7 +14,7 @@ export class CenterClient {
     this.trust = centerTrust(options.centerCaPem, options.centerCaSha256);
     if (this.trust.centerCaPem !== null && !this.baseUrl.startsWith("https://")) throw new ConnectorError("CONFIG_INVALID");
   }
-  private async post<T>(path: string, body: unknown, schema: Schema<T> | null, token: string | null, signal?: AbortSignal, options: { activity?: boolean } = {}): Promise<T> {
+  private async post<T>(path: string, body: unknown, schema: Schema<T> | null, token: string | null, signal?: AbortSignal, options: { activity?: boolean; sessionMetadata?: boolean } = {}): Promise<T> {
     assertActive(signal);
     const text = JSON.stringify(body);
     if (Buffer.byteLength(text, "utf8") > LIMITS.snapshotBytes) throw new ConnectorError("LIMIT_EXCEEDED");
@@ -32,6 +33,7 @@ export class CenterClient {
         // A missing activity route on an older center is reported as "this center does not support it".
         // It never touches the base summary credential, and the caller caches it for this destination.
         if (options.activity === true && response.status === 404) throw new ConnectorError("ACTIVITY_UNSUPPORTED");
+        if (options.sessionMetadata === true && response.status === 404) throw new ConnectorError("SESSION_METADATA_UNSUPPORTED");
         if (token !== null && (response.status === 401 || response.status === 403)) throw new ConnectorError("AUTH_REJECTED", true);
         throw new ConnectorError(token === null ? "PAIRING_FAILED" : "HTTP_FAILED");
       }
@@ -100,6 +102,12 @@ export class CenterClient {
    * `redirect: "error"` policy as the base snapshot, but its own fixed route and its own failure domain:
    * nothing here can invalidate, replace or re-scope the base summary credential.
    */
+  async sessionMetadata(credential: BoundCredential, input: SessionMetadataPublication, signal?: AbortSignal): Promise<SessionMetadataReceipt> {
+    this.bound(credential);
+    const request = sessionMetadataPublicationSchema.parse(input);
+    if (request.generation !== credential.pairing.generation) throw new ConnectorError("RESPONSE_INVALID");
+    return this.post(SESSION_METADATA_ROUTE, request, sessionMetadataReceiptSchema, credential.pairing.token, signal, { sessionMetadata: true });
+  }
   async activity(credential: BoundCredential, input: ActivityPublication, signal?: AbortSignal): Promise<ActivityReceipt> {
     this.bound(credential);
     const request = activityPublicationSchema.parse(input);

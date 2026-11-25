@@ -180,7 +180,7 @@ test('hash异步阶段发生撤销/新run/过期时，写事务重新校验且�
 test('schema1原库追加迁移兼容，基础授权与摘要不动；重复迁移幂等',async()=>{
   const a=makeActor(db,'migrate',BASE);await publish(db,a,[summary('retained')],BASE);
   const before=instanceRecord(db,a.id);
-  db.exec('DROP TRIGGER retire_activity_base; DROP TABLE activity_items; DROP TABLE activity_snapshots; PRAGMA user_version=1;');
+  db.exec('DROP TRIGGER retire_session_metadata_base; DROP TABLE session_metadata_items; DROP TABLE session_metadata_snapshots; DROP TRIGGER retire_activity_base; DROP TABLE activity_items; DROP TABLE activity_snapshots; PRAGMA user_version=1;');
   migrate(db);migrate(db);
   expect(db.query<{user_version:number},[]>('PRAGMA user_version').get()?.user_version).toBe(SCHEMA_VERSION);
   expect(instanceRecord(db,a.id)).toEqual(before);expect(list().total).toBe(1);

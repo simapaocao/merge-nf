@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { capabilitiesSchema, failureCodeSchema, pairCodeSchema } from './connector';
 import { LIMITS, SESSION_GROUP_PREVIEW } from './constants';
 import { idSchema, plainText, scopeSchema, statusSchema, summarySchema, timeSchema } from './summary';
+import { sessionKindSchema } from './session-metadata';
 
 export const errorCodeSchema = z.enum(['UNAUTHENTICATED','FORBIDDEN','BAD_ORIGIN','CSRF','INVALID_INPUT','INVALID_PAIRING','NOT_FOUND','CONFLICT','REVOKE_FIRST','INVALID_SCOPE','DUPLICATE_ID','HASH_MISMATCH','COUNT_MISMATCH','STALE_RUN','RUN_EXPIRED','RUN_CLOSED','TOO_LARGE','RATE_LIMITED','BUSY','UNSUPPORTED_MEDIA','INTERNAL']);
 export const errorResponseSchema = z.strictObject({ error: z.strictObject({ code: errorCodeSchema }) });
@@ -27,14 +28,16 @@ const count = z.number().int().nonnegative();
 export const freshCountsSchema = z.strictObject({ total: count, working: count, waiting: count, idle: count, archived: count, unknown: count });
 export const overviewSchema = z.strictObject({ configuredInstances: count, connectedInstances: count, freshInstances: count, staleInstances: count, lostInstances: count, staleSessions: count, freshCounts: freshCountsSchema.nullable() });
 export type Overview = z.infer<typeof overviewSchema>;
-export const sessionRowSchema = z.strictObject({ ...summarySchema.shape, instanceId: z.uuid(), freshness: freshnessSchema, lastSuccessAt: timeSchema });
+export const sessionRowSchema = z.strictObject({ ...summarySchema.shape, instanceId: z.uuid(), freshness: freshnessSchema, lastSuccessAt: timeSchema,
+  kind: sessionKindSchema.nullable().optional(), parentKnown: z.boolean().optional(), parentId: idSchema.nullable().optional(), parentTitle: plainText(512).optional(),
+});
 export type SessionRow = z.infer<typeof sessionRowSchema>;
 const pageFields = { page: z.coerce.number().int().min(1).max(1_000_000).default(1), pageSize: z.coerce.number().int().min(1).max(LIMITS.pageSize).default(50) };
 const wireBool = z.enum(['true','false']).transform(v => v === 'true');
 /** Card section identity. Declared before the query schemas so both can reference the same closed enum. */
 export const sessionGroupSchema = z.enum(['attention','running','recent']);
 export type SessionGroup = z.infer<typeof sessionGroupSchema>;
-export const sessionsQuerySchema = z.strictObject({ ...pageFields, q: plainText(256).optional(), instanceId: z.uuid().optional(), status: statusSchema.optional(), projectId: idSchema.optional(), standalone: wireBool.optional(), includeArchived: wireBool.optional(), group: sessionGroupSchema.optional() }).refine(f => !(f.standalone && f.projectId) && (!f.projectId || !!f.instanceId));
+export const sessionsQuerySchema = z.strictObject({ ...pageFields, q: plainText(256).optional(), instanceId: z.uuid().optional(), status: statusSchema.optional(), projectId: idSchema.optional(), standalone: wireBool.optional(), includeArchived: wireBool.optional(), focus: wireBool.optional(), group: sessionGroupSchema.optional() }).refine(f => !(f.standalone && f.projectId) && (!f.projectId || !!f.instanceId));
 export const projectsQuerySchema = z.strictObject({ ...pageFields, instanceId: z.uuid().optional(), q: plainText(256).optional() });
 export const projectSchema = z.strictObject({ instanceId: z.uuid(), projectId: idSchema, projectName: plainText(256).nullable() });
 export type Project = z.infer<typeof projectSchema>;
@@ -97,7 +100,7 @@ export type SessionGroups = z.infer<typeof sessionGroupsSchema>;
 /** Card preview query. Reuses the list filters but never carries paging: a preview has one bounded size. */
 export const sessionGroupsQuerySchema = z.strictObject({
   q: plainText(256).optional(), instanceId: z.uuid().optional(), status: statusSchema.optional(), projectId: idSchema.optional(),
-  standalone: wireBool.optional(), includeArchived: wireBool.optional(),
+  standalone: wireBool.optional(), includeArchived: wireBool.optional(), focus: wireBool.optional(),
   previewSize: z.coerce.number().int().min(1).max(LIMITS.pageSize).default(SESSION_GROUP_PREVIEW),
 }).refine(f => !(f.standalone && f.projectId) && (!f.projectId || !!f.instanceId));
 export type SessionGroupsQuery = z.infer<typeof sessionGroupsQuerySchema>;

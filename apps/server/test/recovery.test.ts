@@ -2,7 +2,8 @@ import { expect, test } from 'bun:test';
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { LIMITS, activityHash } from '@nf-hub/protocol';
+import { LIMITS, activityHash, sessionMetadataHash } from '@nf-hub/protocol';
+import { receiveSessionMetadata } from '../src/session-metadata';
 import { receiveActivity } from '../src/activity';
 import { HubDatabase } from '../src/connection';
 import { SCHEMA_VERSION } from '../src/migrations';
@@ -39,35 +40,43 @@ test('重开活动库保留轮号；专用备份不可监听；恢复为全新�
     } finally {db.close();}
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
-test('schema1专用备份只读恢复到schema2；配置保留，所有凭证/摘要/活动表均空且源字节不变',async()=>{
+test('schema1/2专用备份只读恢复到schema3；配置保留而凭证/摘要/活动/父关系均空',async()=>{
   const dir=mkdtempSync(join(tmpdir(),'nf-hub-legacy-backup-'));
   try {
-    const live=join(dir,'live.sqlite'),legacy=join(dir,'schema1-backup.sqlite'),restored=join(dir,'restored.sqlite');
+    const live=join(dir,'live.sqlite'),currentBackup=join(dir,'current-backup.sqlite');
     const source=openDatabase(live);let id='';
     try {
       await initializeAdmin(source,'owner',secret(32),BASE);
       const a=makeActor(source,'configured',BASE);id=a.id;await publish(source,a,[summary('safe-id')],BASE);
       const base=instanceRecord(source,a.id),items=[{id:'safe-id',reply:true,approval:false,error:false,unread:false,backgroundWorkCount:1}];
       await receiveActivity(source,a.hash,{protocolVersion:1,generation:a.generation,runId:base.runSeq,baseHash:base.snapshotHash,available:true,count:1,hash:await activityHash(items),items},()=>BASE);
+      const metadata=[{id:'safe-id',kind:'primary' as const,parentKnown:true,parentId:null}];
+      await receiveSessionMetadata(source,a.hash,{protocolVersion:1,generation:a.generation,runId:base.runSeq,baseHash:base.snapshotHash,available:true,count:1,hash:await sessionMetadataHash(metadata),items:metadata},()=>BASE);
     } finally {source.close();}
-    transferConfig('backup',live,legacy);
-    // Test-only construction of the exact old schema: remove only migration-2 additions before taking
-    // the immutable source fingerprint. restore itself never runs migrations on this source file.
-    const old=new HubDatabase(legacy,{strict:true});
-    try {old.exec('DROP TRIGGER retire_activity_base; DROP TABLE activity_items; DROP TABLE activity_snapshots; PRAGMA user_version=1;');} finally {old.close();}
-    const bytes=readFileSync(legacy),modified=statSync(legacy).mtimeMs;
-    transferConfig('restore',legacy,restored);
-    expect(readFileSync(legacy).equals(bytes)).toBe(true);expect(statSync(legacy).mtimeMs).toBe(modified);
-    expect(existsSync(legacy+'-wal')).toBe(false);expect(existsSync(legacy+'-shm')).toBe(false);
-    const recovered=openDatabase(restored);
-    try {
-      expect(recovered.query<{user_version:number},[]>('PRAGMA user_version').get()?.user_version).toBe(SCHEMA_VERSION);
-      readyToServe(recovered);
-      expect(instanceRecord(recovered,id)).toMatchObject({alias:'configured',authState:'revoked',sessionCount:null,lastSuccessAt:null,snapshotHash:null,scopeJson:null});
-      for(const table of ['admin_sessions','connector_credentials','pairings','sync_runs','session_summaries','activity_snapshots','activity_items']){
-        expect(recovered.query(`SELECT count(*) AS n FROM ${table}`).get()).toEqual({n:0});
-      }
-    } finally {recovered.close();}
+    transferConfig('backup',live,currentBackup);
+    for(const version of [1,2,3]){
+      const legacy=join(dir,`schema${version}-backup.sqlite`),restored=join(dir,`restored${version}.sqlite`);
+      copyFileSync(currentBackup,legacy);
+      const old=new HubDatabase(legacy,{strict:true});
+      try {
+        if(version<3) old.exec('DROP TRIGGER retire_session_metadata_base; DROP TABLE session_metadata_items; DROP TABLE session_metadata_snapshots;');
+        if(version<2) old.exec('DROP TRIGGER retire_activity_base; DROP TABLE activity_items; DROP TABLE activity_snapshots;');
+        old.exec(`PRAGMA user_version=${version};`);
+      } finally {old.close();}
+      const bytes=readFileSync(legacy),modified=statSync(legacy).mtimeMs;
+      transferConfig('restore',legacy,restored);
+      expect(readFileSync(legacy).equals(bytes)).toBe(true);expect(statSync(legacy).mtimeMs).toBe(modified);
+      expect(existsSync(legacy+'-wal')).toBe(false);expect(existsSync(legacy+'-shm')).toBe(false);
+      const recovered=openDatabase(restored);
+      try {
+        expect(recovered.query<{user_version:number},[]>('PRAGMA user_version').get()?.user_version).toBe(SCHEMA_VERSION);
+        readyToServe(recovered);
+        expect(instanceRecord(recovered,id)).toMatchObject({alias:'configured',authState:'revoked',sessionCount:null,lastSuccessAt:null,snapshotHash:null,scopeJson:null});
+        for(const table of ['admin_sessions','connector_credentials','pairings','sync_runs','session_summaries','activity_snapshots','activity_items','session_metadata_snapshots','session_metadata_items']){
+          expect(recovered.query(`SELECT count(*) AS n FROM ${table}`).get()).toEqual({n:0});
+        }
+      } finally {recovered.close();}
+    }
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
 test('恢复拒绝未知schema0/未来版本与live伪备份，所有被拒源只读且不产生目标文件',async()=>{

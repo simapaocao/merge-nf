@@ -8,9 +8,9 @@ import { SCHEMA_VERSION } from './migrations';
 
 type Mode = 'backup'|'restore';
 const columns = 'id,alias,groupName,color,sortOrder,favorite,browserBaseUrl,browserOrigin,embedStatus,generation,runSeq';
-// Schema 2 only adds optional activity tables: these exact configuration columns also exist in schema 1.
+// Schemas 2/3 only add derived activity/type tables; the configuration columns are unchanged.
 // Explicit versions, not a broad <= check; a future schema must be reviewed before joining this set.
-const CONFIG_SCHEMAS:ReadonlySet<number> = new Set([1,2]);
+const CONFIG_SCHEMAS:ReadonlySet<number> = new Set([1,2,3]);
 function copyConfig(source: Database, target: Database, mode: Mode) {
   // Read a consistent snapshot. Explicit column allowlist: no summaries, scope, codes, sessions,
   // connector credentials, audit history or in-flight packets are ever copied, in EITHER direction.

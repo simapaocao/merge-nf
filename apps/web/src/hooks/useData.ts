@@ -5,14 +5,15 @@ import { api } from '../lib/api';
 import { ApiError } from '../lib/errors';
 import { privateKey, useAppState } from './useAppState';
 
-export type SessionFilters = { q:string; instanceId:string; status:SessionStatus|''; projectId:string; standalone:boolean; includeArchived:boolean; page:number; pageSize:number; group?:SessionGroup|'' };
-export const initialFilters:SessionFilters={q:'',instanceId:'',status:'',projectId:'',standalone:false,includeArchived:false,page:1,pageSize:50,group:''};
+export type SessionFilters = { q:string; instanceId:string; status:SessionStatus|''; projectId:string; standalone:boolean; includeArchived:boolean; page:number; pageSize:number; group?:SessionGroup|''; focus?:boolean };
+export const initialFilters:SessionFilters={q:'',instanceId:'',status:'',projectId:'',standalone:false,includeArchived:false,page:1,pageSize:50,group:'',focus:true};
 /** Filters shared by the paged list and the card preview. Paging and the group selector are not included. */
 function filterParams(filters:SessionFilters):URLSearchParams {
   const params=new URLSearchParams();
   if(filters.q.trim()) params.set('q',filters.q.trim()); if(filters.instanceId) params.set('instanceId',filters.instanceId);
   if(filters.status) params.set('status',filters.status); if(filters.projectId && filters.instanceId && !filters.standalone) params.set('projectId',filters.projectId);
   if(filters.standalone) params.set('standalone','true'); if(filters.includeArchived) params.set('includeArchived','true');
+  if(typeof filters.focus==='boolean') params.set('focus',String(filters.focus));
   return params;
 }
 export function sessionsPath(filters:SessionFilters):string {

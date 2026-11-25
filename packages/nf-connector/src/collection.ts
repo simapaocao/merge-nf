@@ -1,9 +1,10 @@
-import { LIMITS, idSchema, scopePredicate, scopeSchema, sortedSummaries, summarySchema, type PublishScope, type Summary } from "@nf-hub/protocol";
+import { LIMITS, idSchema, scopePredicate, scopeSchema, sortedSummaries, summarySchema, type PublishScope, type SessionMetadataItem, type Summary } from "@nf-hub/protocol";
+import { SESSION_RELATIONSHIPS_BATCH, SESSION_RELATIONSHIPS_COLLECT_MS, SESSION_RELATIONSHIPS_QUERY_ID, sessionRelationshipsInputSchema, sessionRelationshipsOutputSchema } from "@nf-hub/protocol";
 import { ConnectorError, assertActive } from "./errors";
-import type { HostApi } from "./host-rpc";
+import { HostRpcError, type HostApi } from "./host-rpc";
 
 type RecordLike = Record<string, unknown>;
-export interface Collection { summaries: Summary[]; projectNames: "available" | "unavailable" | "not-needed"; pages: number; }
+export interface Collection { summaries: Summary[]; sessionMetadata: SessionMetadataItem[]; projectNames: "available" | "unavailable" | "not-needed"; pages: number; }
 export interface CollectOptions { signal?: AbortSignal; now?: () => number; projectNames?: boolean; }
 function record(value: unknown): RecordLike {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ConnectorError("INVALID_RECORD");
@@ -48,7 +49,7 @@ export async function collectSummaries(host: HostApi, rawScope: PublishScope, op
   const deadline = now() + LIMITS.collectMs;
   let pages = 0;
   const check = () => { assertActive(options.signal); if (now() >= deadline) throw new ConnectorError("COLLECTION_TIMEOUT"); };
-  if (scope.mode === "none") return { summaries: [], projectNames: "not-needed", pages: 0 };
+  if (scope.mode === "none") return { summaries: [], sessionMetadata: [], projectNames: "not-needed", pages: 0 };
   async function traverse(queryId: string, input: RecordLike, consume: (row: unknown) => void): Promise<void> {
     let cursor: string | undefined;
     const cursors = new Set<string>();
@@ -77,7 +78,7 @@ export async function collectSummaries(host: HostApi, rawScope: PublishScope, op
       cursor = page.nextCursor; cursors.add(cursor);
     }
   }
-  const selected = scopePredicate(scope), seenIds = new Set<string>(), summaries: Summary[] = [];
+  const selected = scopePredicate(scope), seenIds = new Set<string>(), summaries: Summary[] = [], sessionMetadata: SessionMetadataItem[] = [];
   const statusFilter = scope.includeArchived ? {} : { status: ["idle", "working", "waiting"] };
   // Use supported upstream filters. Standalone and session-ID filters require scanning local summaries.
   const projectIds = scope.mode === "projects" && !scope.includeStandalone ? scope.projectIds : [undefined];
@@ -88,6 +89,9 @@ export async function collectSummaries(host: HostApi, rawScope: PublishScope, op
     if (!selected(summary)) return;
     if (summaries.length >= LIMITS.summaries) throw new ConnectorError("LIMIT_EXCEEDED");
     summaries.push(summary);
+    // Capture only the public enum from this exact list row after scope filtering; never attach it to Summary.
+    const kind = record(row).type;
+    sessionMetadata.push({ id: summary.id, kind: kind === "primary" || kind === "subagent" ? kind : null, parentKnown: false, parentId: null });
   });
   const wanted = new Set(summaries.flatMap(row => row.projectId === null ? [] : [row.projectId]));
   let projectNames: Collection["projectNames"] = "not-needed";
@@ -113,5 +117,50 @@ export async function collectSummaries(host: HostApi, rawScope: PublishScope, op
     }
   }
   check();
-  return { summaries: sortedSummaries(summaries), projectNames, pages };
+  sessionMetadata.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  return { summaries: sortedSummaries(summaries), sessionMetadata, projectNames, pages };
+}
+
+export interface RelationshipsCollection {
+  items: SessionMetadataItem[];
+  support: "available" | "unsupported" | "denied" | "unknown";
+  errorCode: string | null;
+}
+/** A bounded optional query over the complete published ID set, never a details/root/ancestor lookup. */
+export async function collectSessionRelationships(host: HostApi, metadata: readonly SessionMetadataItem[], options: Pick<CollectOptions, "signal" | "now"> = {}): Promise<RelationshipsCollection> {
+  const unknown = metadata.map(item => ({ id: item.id, kind: item.kind, parentKnown: false, parentId: null }));
+  const now = options.now ?? Date.now, deadline = now() + SESSION_RELATIONSHIPS_COLLECT_MS;
+  const all = new Set(unknown.map(item => item.id)), parents = new Map<string, { parentKnown: boolean; parentId: string | null }>();
+  try {
+    assertActive(options.signal);
+    for (let offset = 0; offset < unknown.length; offset += SESSION_RELATIONSHIPS_BATCH) {
+      assertActive(options.signal);
+      if (now() >= deadline) return { items: unknown, support: "unknown", errorCode: "RELATIONSHIPS_TIMEOUT" };
+      const batch = unknown.slice(offset, offset + SESSION_RELATIONSHIPS_BATCH).map(item => item.id);
+      const result = record(await host.request("queries.execute", { queryId: SESSION_RELATIONSHIPS_QUERY_ID, input: sessionRelationshipsInputSchema.parse({ narratorIds: batch }) }, {
+        signal: options.signal, timeoutMs: Math.min(10_000, Math.max(1, deadline - now())),
+      }));
+      assertActive(options.signal);
+      if (now() >= deadline) return { items: unknown, support: "unknown", errorCode: "RELATIONSHIPS_TIMEOUT" };
+      if (result.status !== "succeeded") return { items: unknown, support: "unknown", errorCode: "RELATIONSHIPS_QUERY_FAILED" };
+      const response = sessionRelationshipsOutputSchema.safeParse(result.data);
+      if (!response.success) return { items: unknown, support: "unknown", errorCode: "RELATIONSHIPS_QUERY_FAILED" };
+      const asked = new Set(batch);
+      for (const item of response.data.items) {
+        if (!asked.has(item.id)) return { items: unknown, support: "unknown", errorCode: "RELATIONSHIPS_QUERY_FAILED" };
+        // The public host query checks its own scope/ACL. The connector further restricts the parent to the full
+        // exact base publication, including parents in a later batch and excluding every unsynchronised parent.
+        if (item.parentKnown && (item.parentId === null || all.has(item.parentId))) parents.set(item.id, { parentKnown: true, parentId: item.parentId });
+      }
+    }
+    return { items: unknown.map(item => ({ ...item, ...parents.get(item.id) })), support: "available", errorCode: null };
+  } catch (error) {
+    assertActive(options.signal);
+    const hostCode = error instanceof HostRpcError ? error.diagnostic.hostCode : null;
+    if (hostCode === "METHOD_NOT_FOUND") return { items: unknown, support: "unsupported", errorCode: "RELATIONSHIPS_UNSUPPORTED" };
+    if (hostCode === "NOT_FOUND_OR_DENIED" || hostCode === "PERMISSION_DENIED" || error instanceof ConnectorError && error.code === "RPC_DENIED") {
+      return { items: unknown, support: "denied", errorCode: "RELATIONSHIPS_PERMISSION_DENIED" };
+    }
+    return { items: unknown, support: "unknown", errorCode: error instanceof ConnectorError && error.code === "RPC_TIMEOUT" ? "RELATIONSHIPS_TIMEOUT" : "RELATIONSHIPS_QUERY_FAILED" };
+  }
 }

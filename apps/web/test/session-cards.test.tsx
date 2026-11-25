@@ -4,8 +4,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { SESSION_GROUP_PREVIEW, sessionGroupsSchema, type ActivityCoverage, type GroupSessionRow, type Instance, type SessionGroups as SessionGroupsData } from '@nf-hub/protocol';
 import { initialFilters, sessionGroupsPath, sessionsPath, type SessionFilters } from '../src/hooks/useData';
 import {
-  SessionCard, SessionGroupSection, SessionGroupSections, activityReasonLabels, applyFilterPatch, attentionScopeNote, clearGroupPatch, dedupeSessionRows, groupCountText, groupCoverageText, groupEmptyText,
-  reasonLabel, resolveSessionView, sessionGroupOrder, sessionGroupMeta, sessionGroupsState, sessionListCountText, readState, listUnavailableDetail, unavailableDetail, viewAllPatch,
+  SessionCard, SessionFocusEmpty, SessionFocusToggle, SessionGroupSection, SessionGroupSections, SessionKindBadge, SessionParentLabel, activityReasonLabels, applyFilterPatch, attentionScopeNote, clearGroupPatch, dedupeSessionRows, focusModePatch, groupCountText, groupCoverageText, groupEmptyText,
+  reasonLabel, resolveSessionView, sessionGroupOrder, sessionGroupLabel, sessionGroupMeta, sessionGroupsState, sessionListCountText, readState, listUnavailableDetail, unavailableDetail, viewAllPatch,
 } from '../src/components/SessionCards';
 
 const instanceIdA = '11111111-1111-4111-8111-111111111111';
@@ -167,6 +167,76 @@ describe('会话卡片分区', () => {
   });
 });
 
+describe('会话类型徽标', () => {
+  test('真实 kind 在卡片区分主会话和子代理', () => {
+    const primary = renderToStaticMarkup(<SessionCard row={row({ id: 'main', kind: 'primary', parentKnown: true, parentId: 'fork-source', parentTitle: '分叉来源' })} onOpen={noop} />);
+    const subagent = renderToStaticMarkup(<SessionCard row={row({ id: 'child', kind: 'subagent' })} onOpen={noop} />);
+    expect(primary).toContain('session-kind-badge primary');
+    expect(visibleText(primary)).toContain('主会话');
+    expect(visibleText(primary)).not.toContain('子代理');
+    expect(primary).not.toContain('session-parent-label');
+    expect(primary).not.toContain('分叉来源');
+    expect(subagent).toContain('session-kind-badge subagent');
+    expect(visibleText(subagent)).toContain('子代理');
+    expect(visibleText(subagent)).not.toContain('主会话');
+  });
+
+  test('旧设备缺省和 null 均明确未知，不回退为主会话', () => {
+    for (const kind of [undefined, null]) {
+      const html = renderToStaticMarkup(<SessionKindBadge kind={kind} />);
+      expect(visibleText(html)).toBe('类型未提供');
+      expect(html).toContain('title="需连接器提供"');
+      expect(html).toContain('session-kind-badge unknown');
+      expect(html).not.toContain('主会话');
+    }
+  });
+
+  test('无项目与类型互不替代，不猜父会话', () => {
+    const standalone = renderToStaticMarkup(<SessionCard row={row({ id: 'standalone-child', kind: 'subagent', projectId: null })} onOpen={noop} />);
+    expect(visibleText(standalone)).toContain('独立会话');
+    expect(visibleText(standalone)).toContain('子代理');
+    expect(visibleText(standalone)).not.toContain('主会话');
+    expect(standalone).not.toContain('来自');
+    const unknown = renderToStaticMarkup(<SessionCard row={row({ id: 'primary-looking-title', title: '主会话：开发', projectId: 'project-a' })} onOpen={noop} />);
+    expect(visibleText(unknown)).toContain('类型未提供');
+    expect(unknown).not.toContain('session-kind-badge primary');
+  });
+});
+
+describe('子代理直接父会话', () => {
+  test('可信直接父显示中心提供的标题，空标题回退未命名且不新增链接', () => {
+    const child = row({ id: 'child-with-parent', kind: 'subagent', parentKnown: true, parentId: 'parent', parentTitle: '父会话 <规划>' });
+    const html = renderToStaticMarkup(<SessionCard row={child} onOpen={noop} />);
+    expect(html).toContain('父会话：父会话 &lt;规划&gt;');
+    expect(html).toContain('title="父会话 &lt;规划&gt;"');
+    expect(html.match(/<a /g)?.length).toBe(1);
+    expect(html).not.toContain('session=parent');
+    const unnamed = renderToStaticMarkup(<SessionParentLabel row={{ ...child, parentTitle: '   ' }} />);
+    expect(visibleText(unnamed)).toBe('父会话：未命名会话');
+  });
+
+  test('缺失或不可读的父关系明确未提供，不输出意外父ID或标题', () => {
+    for (const relation of [{}, { parentKnown: false, parentId: null }, { parentKnown: false, parentId: 'private-parent', parentTitle: '私密父标题' }]) {
+      const html = renderToStaticMarkup(<SessionParentLabel row={row({ id: 'unknown-parent', kind: 'subagent', ...relation })} />);
+      expect(visibleText(html)).toBe('父会话未提供');
+      expect(html).not.toContain('private-parent');
+      expect(html).not.toContain('私密父标题');
+      expect(html).not.toContain('无父会话');
+    }
+  });
+
+  test('明确 true/null 才显示无父会话，未知类型不据父关系变子代理', () => {
+    const html = renderToStaticMarkup(<SessionParentLabel row={row({ id: 'no-parent', kind: 'subagent', parentKnown: true, parentId: null })} />);
+    expect(visibleText(html)).toBe('无父会话');
+    const unknown = row({ id: 'unknown-kind-with-parent', kind: null, parentKnown: true, parentId: 'parent', parentTitle: '已授权父' });
+    expect(renderToStaticMarkup(<SessionParentLabel row={unknown} />)).toBe('');
+    const card = renderToStaticMarkup(<SessionCard row={unknown} onOpen={noop} />);
+    expect(visibleText(card)).toContain('类型未提供');
+    expect(card).not.toContain('session-kind-badge subagent');
+    expect(card).not.toContain('已授权父');
+  });
+});
+
 describe('卡片与完整列表的衔接', () => {
   test('查看更多切到列表并带 group，页码重置为 1', () => {
     expect(viewAllPatch('attention')).toEqual({ group: 'attention', page: 1 });
@@ -203,6 +273,63 @@ describe('卡片与完整列表的衔接', () => {
     expect(preview).not.toContain('page=');
     expect(preview).not.toContain('group=');
     expect(preview).toContain(`previewSize=${SESSION_GROUP_PREVIEW}`);
+  });
+});
+
+describe('需关注与全部会话', () => {
+  test('UI 默认关注且列表与预览共享显式 focus，缺参数保持兼容', () => {
+    expect(initialFilters.focus).toBe(true);
+    expect(initialFilters.status).toBe('');
+    for (const focus of [true, false]) {
+      const filters = { ...initialFilters, focus, q: '工作', page: 3, group: 'recent' as const };
+      const list = new URL(sessionsPath(filters), 'http://localhost').searchParams;
+      const preview = new URL(sessionGroupsPath(filters), 'http://localhost').searchParams;
+      expect(list.get('focus')).toBe(String(focus));
+      expect(preview.get('focus')).toBe(String(focus));
+      expect(list.get('group')).toBe('recent');
+      expect(list.get('page')).toBe('3');
+      expect(preview.has('group')).toBe(false);
+      expect(preview.has('page')).toBe(false);
+      expect(list.get('q')).toBe(preview.get('q'));
+    }
+    const { focus: defaultFocus, ...legacy } = initialFilters;
+    expect(defaultFocus).toBe(true);
+    expect(new URL(sessionsPath(legacy), 'http://localhost').searchParams.has('focus')).toBe(false);
+    expect(new URL(sessionGroupsPath(legacy), 'http://localhost').searchParams.has('focus')).toBe(false);
+  });
+
+  test('范围切换清除分区展开并重置页码，其他条件及卡片列表切换保留 focus', () => {
+    const filters: SessionFilters = { ...initialFilters, q: '规划', instanceId: instanceIdA, projectId: 'project-a', status: 'waiting', includeArchived: true, page: 4, group: 'recent' };
+    const all = { ...filters, ...focusModePatch(false) };
+    expect(all).toEqual({ ...filters, focus: false, group: '', page: 1 });
+    expect({ ...all, ...focusModePatch(true) }).toEqual({ ...filters, focus: true, group: '', page: 1 });
+    expect({ ...filters, ...viewAllPatch('running') }.focus).toBe(true);
+    expect({ ...all, ...clearGroupPatch() }.focus).toBe(false);
+    expect(applyFilterPatch(filters, { q: '新的搜索' }).focus).toBe(true);
+    expect(applyFilterPatch(all, { standalone: true, projectId: '' }).focus).toBe(false);
+    expect(resolveSessionView('cards', all.group)).toBe('cards');
+    expect(resolveSessionView('list', all.group)).toBe('list');
+  });
+
+  test('关注模式用待确认标题且保留未知与旧快照，空态有全部入口', () => {
+    const focused = renderToStaticMarkup(<SessionFocusToggle focus onChange={noop} />);
+    const allToggle = renderToStaticMarkup(<SessionFocusToggle focus={false} onChange={noop} />);
+    expect(focused).toContain('aria-pressed="true">需关注');
+    expect(allToggle).toContain('aria-pressed="true">全部');
+    const groups = groupsData({ total: 2, recent: section([row({ id: 'unknown-focus', status: 'unknown' }), row({ id: 'old-focus', status: 'working', freshness: 'stale' })], 2) });
+    const html = renderToStaticMarkup(<SessionGroupSections groups={groups} instances={instances} onOpen={noop} onViewAll={noop} focus />);
+    expect(html).toContain('title="等待、未知状态或旧快照"');
+    expect(visibleText(html)).toContain('待确认');
+    expect(visibleText(html)).toContain('未知');
+    expect(visibleText(html)).toContain('旧快照');
+    expect(html.match(/session-card-link/g)?.length).toBe(2);
+    expect(sessionGroupLabel('recent', false).title).toBe('最近');
+    expect(sessionListCountText(2, 'recent', groups.recent, true)).toBe('共 2 条（待确认）');
+    const empty = renderToStaticMarkup(<SessionFocusEmpty onShowAll={noop} />);
+    expect(visibleText(empty)).toContain('暂无需要关注的会话');
+    expect(visibleText(empty)).toContain('全部会话');
+    expect(empty).toContain('<button');
+    expect(empty).not.toContain('已正常结束');
   });
 });
 

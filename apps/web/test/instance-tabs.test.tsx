@@ -216,12 +216,12 @@ describe('标签计数不把未知当 0', () => {
   test('服务端运行数为空时显示未知而不是 0', () => {
     const view = toActivityView({ runningCount: null, attention: { supported: false, count: null }, background: { supported: false, count: null } }, true);
     expect(view.running).toBeNull();
-    expect(countBadge(view.running)).toEqual({ text: '—', muted: true });
+    expect(countBadge(view.running)).toBeNull();
   });
-  test('真实全零隐藏徽标，非零显示数字', () => {
-    expect(countBadge(0)).toBeNull();
+  test('运行徽标保留可信真零，未知不显示数字', () => {
+    expect(countBadge(0)).toEqual({ text: '0', muted: false });
     expect(countBadge(4)).toEqual({ text: '4', muted: false });
-    expect(countBadge(null)).toEqual({ text: '—', muted: true });
+    expect(countBadge(null)).toBeNull();
   });
   test('计数浮层只保留同步信息，未支持的数据仍未知', () => {
     const view = toActivityView({ runningCount: 0, attention: { supported: false, count: null }, background: { supported: false, count: null } }, true);
@@ -306,17 +306,51 @@ describe('标签栏语义与未知数据', () => {
     expect(html.match(/tabindex="0"/g)).toHaveLength(1);
     expect(html).toContain('aria-controls="workbench-panel"');
   });
-  test('运行数按新鲜摘要显示，陈旧实例显示未知而不是 0', () => {
+  test('运行数按新鲜摘要显示，失联实例显示短状态，未知待处理显示低强调问号', () => {
     const html = render();
-    expect(html).toContain('运行');
-    expect(html).toContain('需要处理尚未上报');
-    expect(html).toContain('title="未提供活动信息"');
-    expect(html).toContain('—');
-    expect(html).not.toContain('不按 0 统计');
+    expect(html).toContain('运行 2 个会话');
+    expect(html).toContain('class="tab-status" title="离线">离线');
+    expect(html).toContain('class="tab-badge muted" aria-label="待处理状态未同步" title="待处理状态未同步"');
+    expect(html).toContain('待处理</span>?');
+    expect(html).not.toContain('运行会话数未知');
+    expect(html).not.toContain('—');
+  });
+  test('待处理已知零仍隐藏，可信运行零保留', () => {
+    const html = render({ activityFor: () => ({ running: 0, attention: { supported: true, count: 0 }, background: { supported: false, count: null } }) });
+    expect(html).not.toContain('待处理');
+    expect(html).toContain('运行 0 个会话');
+  });
+  test('未支持或supported但count未知都不冒充确定零', () => {
+    for (const attention of [{ supported: false, count: 0 }, { supported: false, count: null }, { supported: true, count: null }]) {
+      const html = render({ activityFor: () => ({ running: 7, attention, background: { supported: false, count: null } }) });
+      expect(html).toContain('待处理</span>?');
+      expect(html).toContain('待处理状态未同步');
+      expect(html).not.toContain('待处理 0');
+      expect(html).toContain('运行 7 个会话');
+    }
+  });
+  test('无可信运行数时按真实实例字段显示短状态，不伪造零', () => {
+    const cases: Array<[Partial<Instance>, string]> = [
+      [{ connection: 'unpaired', freshness: 'never' }, '未配对'],
+      [{ connection: 'revoked', freshness: 'stale' }, '已撤销'],
+      [{ connection: 'lost', freshness: 'stale' }, '离线'],
+      [{ freshness: 'stale' }, '数据过期'],
+      [{ freshness: 'never' }, '未同步'],
+      [{ freshness: 'fresh' }, '暂无数据'],
+    ];
+    for (const [patch, label] of cases) {
+      const html = render({ instances: [instance('a', patch)], state: { openIds: ['a'], activeId: 'a' }, activityFor: () => unknownActivity });
+      expect(html).toContain(`class="tab-status" title="${label}">${label}`);
+      expect(html).toContain('待处理状态未同步');
+      expect(html).toContain('待处理</span>?');
+      expect(html).not.toContain('运行 0');
+      expect(html).not.toContain('运行—');
+    }
   });
   test('已支持计数的悬停仅保留简短范围与权限提示', () => {
     const html = render({ activityFor: () => ({ running: 3, attention: { supported: true, count: 2 }, background: { supported: false, count: null } }) });
-    expect(html).toContain('需要处理 2 个会话');
+    expect(html).toContain('待处理 2 个会话');
+    expect(html).not.toContain('待处理状态未同步');
     expect(html).toContain('运行 3 个会话');
     expect(html).toContain('仅同步范围，未归档会话 · 处理权限以原站账号为准');
     expect(html).not.toContain('该实例全部已授权');

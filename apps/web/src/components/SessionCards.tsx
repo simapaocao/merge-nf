@@ -17,6 +17,18 @@ export const sessionGroupMeta: Record<SessionGroup, { title: string; description
   running: { title: '正在运行', description: '含后台任务与系统等待' },
   recent: { title: '最近', description: '按最近活动排序' },
 };
+export function sessionGroupLabel(group: SessionGroup, focus = false): { title: string; description: string } {
+  return focus && group === 'recent' ? { title: '待确认', description: '等待、未知状态或旧快照' } : sessionGroupMeta[group];
+}
+export function focusModePatch(focus: boolean): { focus: boolean; group: ''; page: number } {
+  return { focus, group: '', page: 1 };
+}
+export function SessionFocusToggle({ focus, onChange }: { focus: boolean; onChange: (focus: boolean) => void }) {
+  return <div className="session-view-toggle" role="group" aria-label="会话范围"><button className={focus ? 'active' : ''} aria-pressed={focus} onClick={() => onChange(true)}>需关注</button><button className={!focus ? 'active' : ''} aria-pressed={!focus} onClick={() => onChange(false)}>全部</button></div>;
+}
+export function SessionFocusEmpty({ onShowAll }: { onShowAll: () => void }) {
+  return <div className="session-focus-empty"><span role="status">暂无需要关注的会话</span><button className="text-button" onClick={onShowAll}>全部会话</button></div>;
+}
 /** Scope note for the attention section: the hub never gains approval/reply rights by showing this. */
 export const attentionScopeNote = '权限以原站账号为准';
 const reasonLabels: Record<SessionReason, string> = {
@@ -57,10 +69,10 @@ export function groupCountText(group: Pick<SessionGroupView, 'supported' | 'tota
   if (!group.supported || group.total === null) return '—';
   return group.coverage === 'partial' ? `已知 ${countLabel(group.total)}` : countLabel(group.total);
 }
-export function sessionListCountText(total: number | undefined, group: SessionGroup | '', section?: SessionGroupView): string {
+export function sessionListCountText(total: number | undefined, group: SessionGroup | '', section?: SessionGroupView, focus = false): string {
   if (!group) return `共 ${countLabel(total)} 条`;
   if (total === undefined || !section || !section.supported || section.total === null) return '分区数量 —';
-  return `${section.coverage === 'partial' ? '已知' : '共'} ${countLabel(total)} 条（${sessionGroupMeta[group].title}）`;
+  return `${section.coverage === 'partial' ? '已知' : '共'} ${countLabel(total)} 条（${sessionGroupLabel(group, focus).title}）`;
 }
 export function groupEmptyText(groupKey: SessionGroup, group: Pick<SessionGroupView, 'supported' | 'total' | 'coverage'>): string {
   if (!group.supported) return '未提供';
@@ -129,14 +141,29 @@ export function listUnavailableDetail(pending: boolean): string {
   return pending ? '正在读取会话…' : '数据暂不可用';
 }
 
+export function SessionKindBadge({ kind }: { kind: SessionRow['kind'] }) {
+  const known = kind === 'primary' || kind === 'subagent';
+  return <span className={`session-kind-badge ${known ? kind : 'unknown'}`} title={known ? undefined : '需连接器提供'}>{kind === 'primary' ? '主会话' : kind === 'subagent' ? '子代理' : '类型未提供'}</span>;
+}
+
+export function SessionParentLabel({ row }: { row: Pick<SessionRow, 'kind' | 'parentKnown' | 'parentId' | 'parentTitle'> }) {
+  if (row.kind !== 'subagent') return null;
+  if (row.parentKnown === true && typeof row.parentId === 'string' && row.parentId.length > 0) {
+    const title = row.parentTitle?.trim() || '未命名会话';
+    return <span className="session-parent-label" title={title}>父会话：{title}</span>;
+  }
+  return <span className="session-parent-label">{row.parentKnown === true && row.parentId === null ? '无父会话' : '父会话未提供'}</span>;
+}
+
 export function SessionCard({ row, instance, onOpen, groupKey }: { row: SessionCardRow; instance?: Instance; onOpen: (row: SessionRow) => void; groupKey?: SessionGroup }) {
   const old = row.freshness !== 'fresh', title = cardTitle(row), activityLabels = activityReasonLabels(row, groupKey);
   const device = instanceDeviceLabel(instance, row.instanceId);
   return <li className={`session-card${old ? ' snapshot-card' : ''}`}>
     <a className="session-card-link" href={intentHash({ view: 'workbench', instanceId: row.instanceId, sessionId: row.id })} title={attentionScopeNote}
       onClick={event => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onOpen(row); }}>
-      <span className="session-card-head"><span className="instance-inline"><span className="instance-color" style={{ backgroundColor: instance?.color ?? '#71858a' }} /><span className="session-card-device">{device}</span></span>{old && <span className="old-label">旧快照</span>}</span>
+      <span className="session-card-head"><span className="instance-inline"><span className="instance-color" style={{ backgroundColor: instance?.color ?? '#71858a' }} /><span className="session-card-device">{device}</span></span><SessionKindBadge kind={row.kind} />{old && <span className="old-label">旧快照</span>}</span>
       <span className="session-card-title" title={title}>{title}</span>
+      <SessionParentLabel row={row} />
       <span className="session-card-meta"><span className="project-cell" title={row.projectId ?? undefined}>{projectLabel(row)}</span><SessionPill status={row.status} old={old} /></span>
       {activityLabels && activityLabels.length > 0 && <span className="session-card-reasons" aria-label="会话活动">{activityLabels.map(label => <span key={label} className="session-card-reason">{label}</span>)}</span>}
       <span className="session-card-foot"><span title={absoluteTime(row.lastMessageAt ?? row.updatedAt)}>{relativeTime(row.lastMessageAt ?? row.updatedAt)}</span><span className="session-card-sync" title={absoluteTime(row.lastSuccessAt)}>同步 {relativeTime(row.lastSuccessAt)}</span></span>
@@ -144,18 +171,19 @@ export function SessionCard({ row, instance, onOpen, groupKey }: { row: SessionC
   </li>;
 }
 
-export function SessionGroupSection({ groupKey, group, instances, onOpen, onViewAll }: { groupKey: SessionGroup; group: SessionGroupView; instances: readonly Instance[]; onOpen: (row: SessionRow) => void; onViewAll: (group: SessionGroup) => void }) {
+export function SessionGroupSection({ groupKey, group, instances, onOpen, onViewAll, focus = false }: { groupKey: SessionGroup; group: SessionGroupView; instances: readonly Instance[]; onOpen: (row: SessionRow) => void; onViewAll: (group: SessionGroup) => void; focus?: boolean }) {
   const headingId = `session-group-${groupKey}`, rows = group.supported ? dedupeSessionRows(group.items).slice(0, SESSION_GROUP_PREVIEW) : [];
   const byId = new Map(instances.map(item => [item.id, item]));
   const more = group.supported && group.total !== null && group.total > rows.length;
+  const meta = sessionGroupLabel(groupKey, focus);
   return <section className={`session-group ${groupKey}`} aria-labelledby={headingId}>
-    <div className="session-group-heading"><div><h3 id={headingId} title={sessionGroupMeta[groupKey].description}>{sessionGroupMeta[groupKey].title}<span className="count-badge" title={!group.supported || group.total === null ? '未提供或已过期' : groupCoverageText(groupKey, group.coverage)} data-coverage={group.coverage} aria-label={`${sessionGroupMeta[groupKey].title}${group.coverage === 'partial' ? '已知数量' : '数量'}`}>{groupCountText(group)}</span></h3></div>
+    <div className="session-group-heading"><div><h3 id={headingId} title={meta.description}>{meta.title}<span className="count-badge" title={!group.supported || group.total === null ? '未提供或已过期' : groupCoverageText(groupKey, group.coverage)} data-coverage={group.coverage} aria-label={`${meta.title}${group.coverage === 'partial' ? '已知数量' : '数量'}`}>{groupCountText(group)}</span></h3></div>
       {more && <button className="text-button" onClick={() => onViewAll(groupKey)}>{groupKey === 'recent' ? '查看全部会话' : '查看更多'}</button>}</div>
     {rows.length === 0 ? <p className="session-group-note">{groupEmptyText(groupKey, group)}</p>
       : <ul className="session-card-grid" role="list">{rows.map(row => <SessionCard key={sessionKey(row)} row={row} instance={byId.get(row.instanceId)} onOpen={onOpen} groupKey={groupKey} />)}</ul>}
   </section>;
 }
 
-export function SessionGroupSections({ groups, instances, onOpen, onViewAll }: { groups: SessionGroups; instances: readonly Instance[]; onOpen: (row: SessionRow) => void; onViewAll: (group: SessionGroup) => void }) {
-  return <div className="session-groups">{sessionGroupOrder.map(key => <SessionGroupSection key={key} groupKey={key} group={groups[key]} instances={instances} onOpen={onOpen} onViewAll={onViewAll} />)}</div>;
+export function SessionGroupSections({ groups, instances, onOpen, onViewAll, focus = false }: { groups: SessionGroups; instances: readonly Instance[]; onOpen: (row: SessionRow) => void; onViewAll: (group: SessionGroup) => void; focus?: boolean }) {
+  return <div className="session-groups">{sessionGroupOrder.map(key => <SessionGroupSection key={key} groupKey={key} group={groups[key]} instances={instances} onOpen={onOpen} onViewAll={onViewAll} focus={focus} />)}</div>;
 }
