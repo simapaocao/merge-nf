@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { LIMITS, changesWithInstancesSchema, instanceSchema, instancesSchema, pairingSchema, pairResponseSchema, routes, runResponseSchema, snapshotHash } from '@nf-hub/protocol';
+import { SESSION_MS, SESSION_RENEW_INTERVAL_MS } from '../src/auth';
 import { browserBase, readConfig } from '../src/config';
 import { BASE, all, cfg, httpFixture, makeActor, publish, summary } from './fixture';
 
@@ -7,7 +8,7 @@ let h: Awaited<ReturnType<typeof httpFixture>>;
 beforeEach(async()=>{h=await httpFixture();}); afterEach(()=>{h.db.close();});
 test('登录用独立的 HttpOnly host-only Secure cookie；限速、来源、CSRF、失效检查',async()=>{
   const cookie = h.authHeaders.get('set-cookie')!;
-  expect(cookie).toContain('__Host-'); expect(cookie).toContain('Secure'); expect(cookie).toContain('HttpOnly'); expect(cookie).not.toContain('Domain=');
+  expect(cookie).toContain('__Host-'); expect(cookie).toContain('Secure'); expect(cookie).toContain('HttpOnly'); expect(cookie).toContain('SameSite=Lax'); expect(cookie).toContain(`Max-Age=${SESSION_MS / 1000}`); expect(cookie).toContain('Expires='); expect(cookie).not.toContain('Domain=');
   for(const path of [routes.me,routes.sessions,routes.projects,routes.overview,routes.instances,routes.changes]) expect((await h.req(path)).status).toBe(401);
   expect((await h.req(routes.instances,'GET',undefined,{cookie:h.cookie,host:'elsewhere.example.invalid','x-forwarded-host':cfg.publicUrl.host})).status).toBe(403);
   expect((await h.req(routes.instances,'GET',undefined,{cookie:h.cookie,'x-forwarded-for':'127.0.0.1'},'192.0.2.4')).status).toBe(403);
@@ -90,4 +91,47 @@ test('仅明确回环开发可用 HTTP，生产地址和不受信反代不能放
   for (const env of [{PUBLIC_URL:'http://localhost'},{PUBLIC_URL:'http://example.invalid',DEV_HTTP:'1'},{PUBLIC_URL:'http://localhost',DEV_HTTP:'1',BIND_HOST:'0.0.0.0'}, {PUBLIC_URL:'https://user@example.invalid'}, {PUBLIC_URL:'https://*.example.invalid'},{PUBLIC_URL:'https://example.invalid',BIND_HOST:'0.0.0.0'},{PUBLIC_URL:'http://localhost',DEV_HTTP:'1',NODE_ENV:'production'}]) expect(()=>readConfig(env)).toThrow();
   expect(readConfig({PUBLIC_URL:'http://localhost:17900',DEV_HTTP:'1'}).devHttp).toBe(true);
   expect(()=>browserBase('https://hub.example.invalid:9443/nf',cfg)).toThrow('INVALID_INPUT'); // host-only cookies ignore port.
+});
+test('持久化登录支持 30 天滑动续期，登出不续期且超过 30 天未访问自动失效',async()=>{
+  // Within 24h, active requests do not emit redundant Set-Cookie renewals.
+  h.clock.now += SESSION_RENEW_INTERVAL_MS - 60_000;
+  const early = await h.req(routes.me,'GET',undefined,{cookie:h.cookie});
+  expect(early.status).toBe(200);
+  expect(early.headers.get('set-cookie')).toBeNull();
+
+  // After 24h (and past the old 12h window), active requests renew session and refresh cookie.
+  h.clock.now += 2 * 60_000;
+  const renewed = await h.req(routes.me,'GET',undefined,{cookie:h.cookie});
+  expect(renewed.status).toBe(200);
+  const refreshed = renewed.headers.get('set-cookie')!;
+  expect(refreshed).toContain(h.cookie);
+  expect(refreshed).toContain(`Max-Age=${SESSION_MS / 1000}`);
+  expect(refreshed).toContain('SameSite=Lax');
+
+  // Another immediate request stays quiet until the next 24h window.
+  expect((await h.req(routes.me,'GET',undefined,{cookie:h.cookie})).headers.get('set-cookie')).toBeNull();
+
+  // Still valid 20 days later and slides again, pushing expiry past the original 30-day mark.
+  h.clock.now += 20 * 24 * 60 * 60 * 1000;
+  const slided = await h.req(routes.me,'GET',undefined,{cookie:h.cookie});
+  expect(slided.status).toBe(200);
+  expect(slided.headers.get('set-cookie')).toContain(`Max-Age=${SESSION_MS / 1000}`);
+
+  // Logout after >24h clears the cookie and never renews it.
+  h.clock.now += SESSION_RENEW_INTERVAL_MS + 60_000;
+  const loggedOut = await h.req(routes.logout,'POST',undefined,h.writeHeaders);
+  expect(loggedOut.status).toBe(204);
+  const cleared = loggedOut.headers.get('set-cookie')!;
+  expect(cleared).toContain('Max-Age=0');
+  expect(cleared).not.toContain(h.cookie);
+  expect((await h.req(routes.me,'GET',undefined,{cookie:h.cookie})).status).toBe(401);
+
+  // A fresh session left inactive past SESSION_MS expires and cannot be renewed.
+  const fresh = await httpFixture();
+  try {
+    fresh.clock.now += SESSION_MS + 1;
+    const expired = await fresh.req(routes.me,'GET',undefined,{cookie:fresh.cookie});
+    expect(expired.status).toBe(401);
+    expect(expired.headers.get('set-cookie')).toBeNull();
+  } finally { fresh.db.close(); }
 });

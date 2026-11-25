@@ -7,9 +7,11 @@
 1. **Commit 1 — `feat: add session kind metadata, focus mode, and tab activity polish`**
    - 完整保留并提交前序会话中未提交的改动（主/子会话元数据协议、连接器 `0.1.4`、服务端迁移与分组视图、需关注/全部模式、标签栏活性与概览精简等），未做任何逻辑删改。
 2. **Commit 2 — `feat(web): adapt mobile UI for iPhone SE 3 and prevent pinch zoom`**
-   - 仅包含本次针对手机端（重点 **iPhone SE 3，375×667 CSS 视口，iOS Safari**）的 UI 操作优化、防双指缩放/防输入框自动放大防护、新增单元测试、发布清单白名单更新，以及本文档。
+   - 仅包含本次针对手机端（重点 **iPhone SE 3，375×667 CSS 视口，iOS Safari**）的 UI 操作优化、防双指缩放/防输入框自动放大防护、新增单元测试、发布清单白名单更新，以及本文档初版。
+3. **Commit 3 — `fix(auth): persist mobile login sessions with 30d sliding cookie and SameSite=Lax`**
+   - 修复手机端频繁要求重新登录的问题：服务端会话有效期从固定 12 小时升级为 30 天并支持按 24 小时节流自动滑动续期；Cookie 改为 `SameSite=Lax` 并同时下发 `Max-Age` 与 `Expires`；登录表单补齐 `method="post"`、`name`/`id`/`htmlFor`/`type="submit"` 便于 iOS Safari / iCloud 钥匙串保存和自动填充密码。
 
-后续如需查看本次全部改动，直接执行 `git show HEAD` 即可，与前序功能改动完全解耦。
+后续如需查看本次全部改动，可直接查看 Commit 2（`26e1628`）与 Commit 3（`HEAD`），与前序功能改动（`e6f789e`）完全解耦。
 
 ---
 
@@ -27,6 +29,10 @@
 | `apps/web/src/styles.css` | ① 全局防缩放与顺滑滚动基础（`touch-action: pan-x pan-y`、`overscroll-behavior`、`-webkit-text-size-adjust: 100%`、交互元素 `touch-action: manipulation`、安全区 `env(safe-area-inset-*)`）；② 移动端所有 `<input>`/`<select>` 统一 `16px` 杜绝 iOS Safari 聚焦自动放大；③ 375px 双行顶栏（第一行侧栏 + 「会话/工作台/连接」一键分段切换 + 工作台/外观/账户操作，≤355px 回退折叠菜单；第二行全宽独立实例标签栏）；④ 侧栏抽屉放宽至 `min(280px, 82vw)`，遮罩改为相对 `.app-body` 绝对定位；⑤ 会话列表（`.session-table`）在移动端转为纵向卡片行，彻底消除 `820px` 横向拖动；⑥ 修复 `.connection-paths > div` 在 ≤980px 下未转单列导致的三列挤压问题；⑦ 连接卡片危险操作区分隔离，所有弹窗改为底部抽屉卡片，登录页输入框与按钮触控放大。 |
 | `apps/web/test/mobile-viewport.test.ts` | 新增单元测试，覆盖 `index.html` viewport/format-detection 配置、`installMobileZoomGuard()` 手势/双指拦截与单指放行及清理逻辑、移动端防输入放大 `16px` 与 `.connection-paths` 单列样式回归校验。 |
 | `deploy/package-release.py` | 将新增的 `apps/web/src/lib/mobileViewport.ts` 与 `apps/web/test/mobile-viewport.test.ts` 纳入 `TEXT_GROUPS` 严格源码白名单，确保后续发布打包校验通过。 |
+| `apps/server/src/auth.ts` | 会话有效期 `SESSION_MS` 由 12 小时调整为 30 天（无需数据库迁移）；新增 `renewSession()` 按 24 小时节流自动滑动续期；`sessionCookie()` 保持 `__Host-` / `HttpOnly` / `Secure` / 无 `Domain`，将 `SameSite=Strict` 改为 `SameSite=Lax` 并同时输出 `Max-Age` 与 `Expires`。 |
+| `apps/server/src/web-routes.ts` | 登录与登出使用统一时钟写入 `Set-Cookie`；在 `/api/*` 鉴权中间件中对非登出请求按 24 小时节流自动续期并回写刷新后的 `Set-Cookie`。 |
+| `apps/web/src/pages/LoginPage.tsx` | 登录表单补齐 `method="post"`、`htmlFor`/`id`/`name`、`type="text"`、`autoCorrect="off"` 及 `type="submit"`，改善 iOS Safari / iCloud 钥匙串密码保存与自动填充体验。 |
+| `apps/server/test/auth-http.test.ts` | 补充 30 天 `Max-Age`/`Expires`/`SameSite=Lax`、24 小时节流滑动续期、登出不续期、超过 30 天不活跃失效等服务端鉴权测试。 |
 
 ---
 
@@ -37,11 +43,12 @@
   - 保留 `.iframe-area iframe` 的 `color-scheme: light dark` 与无 `filter` 约束。
   - 保留 `PageNavigation` 桌面/移动双语义与 `aria-current="page"` 断言、`InstanceTabBar` 无障碍与文案断言、`SessionCards.css` 隔离规则（不含 `:root` 与 `.session-table`）。
   - 桌面端（`>720px`）布局与原有交互行为未改动（仅对 `≤980px` 补齐 `.connection-paths > div` 单列修复，以及全局搜索框增加输入后的清空按钮）。
-- **跨域 iframe 边界**：
+- **跨域 iframe 与 iOS Safari 边界**：
   - 防双指缩放逻辑作用于聚合工作台外壳与所有管理页面（全局会话、连接管理、登录页、抽屉、弹窗、顶栏与标签栏）。
   - 实例工作台内嵌的各 NF 原站 `iframe` 属于独立 origin，浏览器同源策略禁止父页面监听或拦截其内部触控手势；若原站内部页面需要禁止双指缩放，需在各 NF 原站前端单独处理。
+  - 聚合工作台本身的登录态现已支持 30 天滑动持久化；但如果在 iPhone 上使用的是 Safari「无痕浏览」，关闭标签/浏览器仍会清空 Cookie。此外，若是指**工作台内嵌的某个 NF 原站**每次都要重新登录，通常是因为 iOS Safari 默认开启「阻止跨网站跟踪（ITP）」会拦截跨域 `iframe` 的第三方 Cookie（可在 iOS「设置 → Safari 浏览器 → 阻止跨网站跟踪」确认，或通过右上角「在新窗口打开」直连原站）。
 - **未改动线上/运行中环境**：
-  - 未重启或修改任何运行中的 NF 宿主与连接器；`apps/web/dist` 已在本地重新构建，待你确认后按既有流程部署即可。
+  - 未重启或修改任何运行中的 NF 宿主与连接器；本次 Commit 3 同时改动了 `apps/server` 与 `apps/web`，部署时需一起更新服务端与前端产物（无需数据库迁移，既有在线会话也会在下一次请求时自动续期为 30 天）。
 
 ---
 

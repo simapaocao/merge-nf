@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { changesQuerySchema, createInstanceSchema, loginSchema, projectsQuerySchema, routes, sessionGroupsQuerySchema, sessionsQuerySchema, updateInstanceSchema } from '@nf-hub/protocol';
-import { login, logout, sessionCookie, verifyCsrf, verifyOrigin, webSession } from './auth';
+import { login, logout, renewSession, sessionCookie, verifyCsrf, verifyOrigin, webSession } from './auth';
 import { changes, instanceActivity, overview, projects, sessionGroups, sessions } from './dashboard';
 import { fail, validated } from './errors';
 import { noBody, queryParams, type Router, type Services } from './http-types';
@@ -16,16 +16,18 @@ export function webRoutes(app: Router, {db,config,clock,admission}: Services) {
     return admission.withSlot('login',2,async () => {
       const body = validated(loginSchema,await readJson(c.req.raw,8192));
       const result = await login(db,body.username,body.password,clock);
-      c.header('Set-Cookie',sessionCookie(config,result.token)); return c.json(result.auth);
+      c.header('Set-Cookie',sessionCookie(config,result.token,false,result.now)); return c.json(result.auth);
     });
   });
   app.use('/api/*', async (c,next) => {
-    const s = webSession(db,config,c.req.raw,clock());
+    const now = clock();
+    const s = webSession(db,config,c.req.raw,now);
     if (!['GET','HEAD'].includes(c.req.method)) { verifyOrigin(config,c.req.raw); verifyCsrf(c.req.raw,s); }
+    if (c.req.path !== routes.logout && renewSession(db,s,now)) c.header('Set-Cookie',sessionCookie(config,s.token,false,now));
     c.set('session',s); await next();
   });
   app.get(routes.me,c => { const {username,csrfToken} = c.get('session'); return c.json({username,csrfToken}); });
-  app.post(routes.logout,c => { noBody(c); logout(db,c.get('session'),clock()); c.header('Set-Cookie',sessionCookie(config,'',true)); return c.body(null,204); });
+  app.post(routes.logout,c => { noBody(c); logout(db,c.get('session'),clock()); c.header('Set-Cookie',sessionCookie(config,'',true,clock())); return c.body(null,204); });
   app.get(routes.instances,c => c.json(listInstances(db,clock())));
   app.get(`${routes.instances}/:id`,c => c.json(instanceDto(instanceRecord(db,validated(z.uuid(),c.req.param('id'))),clock())));
   app.post(routes.instances,async c => {
