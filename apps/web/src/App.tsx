@@ -57,7 +57,7 @@ function Dashboard() {
   const [workbenchSlot, setWorkbenchSlot] = useState<HTMLDivElement | null>(null);
   const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 720px)').matches);
   const [drawer, setDrawer] = useState(false);
-  const [tabsCollapsed, setTabsCollapsed] = useState(false);
+  const [tabsCollapsed, setTabsCollapsed] = useState(() => window.matchMedia('(max-width: 720px)').matches);
   const [mountedIds, setMountedIds] = useState<readonly string[]>([]);
   const [split, setSplit] = useState<SplitState>(defaultSplitState);
   const [splitHydratedKey, setSplitHydratedKey] = useState<string | null>(null);
@@ -105,7 +105,7 @@ function Dashboard() {
   useEffect(() => { if (verified && !instances.length && !window.location.hash) navigate({ view: 'connections' }); }, [verified, instances.length]);
   useEffect(() => {
     const query = window.matchMedia('(max-width: 720px)');
-    const change = () => { setMobile(query.matches); setDrawer(false); };
+    const change = () => { setMobile(query.matches); setDrawer(false); setTabsCollapsed(query.matches); };
     query.addEventListener('change', change);
     return () => query.removeEventListener('change', change);
   }, []);
@@ -204,6 +204,7 @@ function Dashboard() {
       <button ref={sidebarButton} className="icon-button sidebar-toggle" aria-label={open ? '收起实例列表' : '展开实例列表'} title={open ? '收起实例列表' : '展开实例列表'} aria-expanded={open} aria-controls="instance-sidebar" onClick={() => { if (mobile) setDrawer(value => !value); else setPreferences({ sidebar: !sidebar }); }}><Icon name="sidebar" size={18} /></button>
       <a href={intentHash({ view: 'sessions' })} className="brand" title="多 NF 工作台"><span className="brand-mark">NF</span><span className="brand-copy">多 NF 工作台</span></a>
       <PageNavigation view={intent.view} onChange={updateView} />
+      {tabs.state.openIds.length > 0 && <button type="button" className={`icon-button mobile-tabs-toggle${!tabsCollapsed ? ' active' : ''}`} aria-expanded={!tabsCollapsed} aria-controls="instance-tablist" aria-label={tabsCollapsed ? `展开已打开的 ${tabs.state.openIds.length} 个实例标签` : '隐藏实例标签栏'} title={tabsCollapsed ? '展开实例标签栏' : '隐藏实例标签栏'} onClick={() => setTabsCollapsed(value => !value)}><span className="mobile-tabs-count">{tabs.state.openIds.length}</span></button>}
       <InstanceTabBar state={tabs.state} instances={instances} selectedId={selectedId} mountedIds={mountedSet} activityFor={activity.activityFor} lastSuccessFor={activity.lastSuccessFor} onActivate={activateTab} onClose={closeTab} onCloseAll={closeAllTabs} onReorder={tabs.reorder} splitIds={splitIds} onDragTabChange={setDraggingTabId} collapsed={tabsCollapsed} onToggleCollapsed={() => setTabsCollapsed(value => !value)} />
       <div className="header-workbench-slot" ref={setWorkbenchSlot} hidden={intent.view !== 'workbench'} />
       <div className="header-end"><AppearanceMenu /><HeaderMenu label="账户菜单" icon={<Icon name="user" size={17} />} className="account-menu"><div className="menu-heading">{auth?.username}</div><button className="menu-item" data-close-menu disabled={signingOut} onClick={() => { void logout(); }}><Icon name="logout" size={17} />{signingOut ? '正在退出…' : '退出登录'}</button></HeaderMenu></div>

@@ -17,6 +17,8 @@
    - 新增多 NF 窗口分屏设置（`单屏` / `左右双屏` / `上下双屏` / `三屏并排` / `左主右双`），支持指针拖拽分隔线实时调宽（双击均分、键盘可调）、每个分屏独立切换实例/刷新/对调/全屏/关闭；保持所有 `iframe` 位于 `.iframe-area` 稳定 DOM 顺序中仅改定位尺寸，切分屏/对调/改大小均**不重载**已保活 NF 页面；分屏状态按账号隔离持久化到 `sessionStorage` 并在登出时同步清理。
 6. **Commit 6 — `feat(web): enable iOS standalone PWA web app metadata`**
    - 为工作台补齐 iOS/Android 桌面全屏 Web App 元信息（`apple-mobile-web-app-capable`、`mobile-web-app-capable`、`apple-mobile-web-app-status-bar-style="default"`、`apple-mobile-web-app-title`），在不改动严格静态资源白名单（`package-release.py` / `static.test.ts`）的前提下支持添加到主屏幕以全屏 App 打开；同步在 `10.8.0.1` 上线 `/apple-touch-icon.png` 及独立只读反代容器 `nf-pwa-bridge`（给 `nf1/nf2/nf12.smpc.asia` 提供各子域名隔离的 AES-256-GCM 30 天 `HttpOnly; Secure; SameSite=Lax` Cookie 持久兜底与 `/api/_nf_pwa_bridge.js` 自动回填，应对 iOS `Web.app` 清理跨源 `iframe` `localStorage` 问题）。
+7. **Commit 7 — `feat(web): compact mobile header and hide tab row by default`**
+   - 手机端（`≤720px`）默认收起第二行实例标签栏且收起态完全隐藏（`display: none`，`0px`），在顶栏第一行提供带打开数量角标的一键展开/隐藏按钮（`.mobile-tabs-toggle`），并将顶栏单行高度从 `44px` 压缩至 `38px`（顶部总占用由 `84px` 降至 `38px`）；桌面端保持原样。同步升级 `10.8.0.1` 的 `nf-pwa-bridge`，增加 `/api/_nf_pwa_prefs` 与压缩加密 Cookie `__Host-nf_pwa_prefs`，自动持久化并首屏无闪烁恢复各 NF 的全部「外观与界面」本地设置（`mantine-color-scheme-value`、`narrafork_oled`、`narrafork_plugin_theme`、`narrafork_appearance_sync_v1:*`、`narrafork_background`、`narrafork_lang` 等）。
 
 后续如需查看本次全部改动，可直接查看 Commit 2（`26e1628`）至 `HEAD`，与前序功能改动（`e6f789e`）完全解耦。
 

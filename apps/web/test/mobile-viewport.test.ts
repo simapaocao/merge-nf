@@ -74,5 +74,6 @@ describe('移动端缩放防护与 SE3 适配基础', () => {
     expect(css).toContain('.filters select{width:100%;height:40px;font-size:16px');
     expect(css).toContain('.form-stack input:not([type=checkbox]):not([type=color]){font-size:16px');
     expect(css).toContain('.page-size select{height:38px;font-size:16px');
+    expect(css).toContain('.instance-tabs.tabs-empty-state,.instance-tabs.collapsed{display:none}');
   });
 });
